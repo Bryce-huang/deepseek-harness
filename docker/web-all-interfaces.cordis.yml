@@ -1,0 +1,11 @@
+# Container patch over the shipped Web composition (dsh-base + dsh-web-app):
+# binds the webserver to all interfaces on 8080. The CLI blocks
+# `--host 0.0.0.0` as a footgun for interactive use; a container's network
+# exposure is governed by port publishing, so the deliberate deployment path
+# is this overlay. The bind-time LAN-trust fence keeps sampling interface
+# addresses. Treat any published deployment like shell access, not as a
+# security boundary.
+- id: webserver
+  config:
+    host: '0.0.0.0'
+    port: 8080

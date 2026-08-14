@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-14-docker-web-image.md
+2026-08-14-docker-web-image.md: 5869d077a83c144fcd3e437c2eb4469793378bc1
+2026-08-14-docker-web-image.zh.md: efb3a5403bd823a1dd5ff28c430074c295d0aafb

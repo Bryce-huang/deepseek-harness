@@ -1,0 +1,14 @@
+# Build outputs are regenerated inside the image; sources are the context.
+**/lib/
+**/dist/
+website/.dist/
+native/target/
+
+# Tooling state and local artifacts never enter the build.
+.git/
+node_modules/
+**/node_modules/
+.claude/
+.env
+*.log
+tmp/

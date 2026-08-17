@@ -45,7 +45,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value={{date:'YYYY.MM.DD'}}
+            type=raw,value={{date:YYYY.MM.DD}}
             type=sha,prefix=sha-,format=short
             type=ref,event=tag
 

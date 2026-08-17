@@ -34,9 +34,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # GHCR requires lowercase repository names; GitHub allows mixed case.
-      - name: Resolve image name
+      # The date tag is computed here because metadata-action's {{date}}
+      # expression resolves empty on push events and silently drops the tag.
+      - name: Resolve image name and date tag
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +'%Y.%m.%d')" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata for Docker
         id: meta
@@ -45,7 +49,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value={{date:YYYY.MM.DD}}
+            type=raw,value=${{ steps.image.outputs.date }}
             type=sha,prefix=sha-,format=short
             type=ref,event=tag
 

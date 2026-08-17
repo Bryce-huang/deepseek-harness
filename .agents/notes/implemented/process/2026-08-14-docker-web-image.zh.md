@@ -12,7 +12,7 @@ Status: implemented
 
 仓库根目录的多阶段 `Dockerfile` 从源码构建，使每个镜像对应触发构建的 git commit。builder 阶段执行 `pnpm install --frozen-lockfile` 与 `pnpm run build`；运行时阶段复制整个 workspace（完整 node_modules 加构建出的 `lib/` 与 `apps/web/dist/`）。两个阶段都使用完整 `node:24` 镜像（非 slim），因为 harness 的 shell 与 subprocess 能力会在容器内执行系统命令。入口是 `dsh web --patch docker/web-all-interfaces.cordis.yml`：CLI 把 `--host 0.0.0.0` 作为交互使用的危险操作拒绝，因此 all-interfaces 绑定 8080 端口由该 overlay 显式声明，容器的对外暴露由端口发布控制。`DSH_HOME=/data` 加声明的卷把 `~/.dsh` 持久化树（会话、设置、凭据）移到挂载点。LLM 访问全部走环境注入：`DEEPSEEK_API_KEY` 与 `DEEPSEEK_BASE_URL` 在 `docker run` 时注入；更换协议通过挂载 profile patch 层实现，不写进镜像内容。
 
-`docker-build.yml` 用内置 `GITHUB_TOKEN` 发布到 GHCR（无需配置 registry secrets）。master 推送发布 `latest` 加 `sha-<short>`；`v*` 与 `dsh-v*` tag 发布 tag 名。仓库名转为小写，因为 GHCR 要求镜像路径全小写。构建为 amd64 并使用 GitHub Actions 缓存，结构参照 wehermes 项目的 workflow。
+`docker-build.yml` 用内置 `GITHUB_TOKEN` 发布到 GHCR（无需配置 registry secrets）。master 推送发布 `latest`、UTC 构建日期（`YYYY.MM.DD`）与 `sha-<short>`；`v*` 与 `dsh-v*` tag 发布 tag 名。仓库名转为小写，因为 GHCR 要求镜像路径全小写。构建为 amd64 并使用 GitHub Actions 缓存，结构参照 wehermes 项目的 workflow。
 
 ## Alternatives considered
 

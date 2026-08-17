@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-14-docker-web-image.md
-2026-08-14-docker-web-image.md: 5869d077a83c144fcd3e437c2eb4469793378bc1
-2026-08-14-docker-web-image.zh.md: efb3a5403bd823a1dd5ff28c430074c295d0aafb
+2026-08-14-docker-web-image.md: ca534e8379264bfe81e7080de9ab3ebd5ce0334d
+2026-08-14-docker-web-image.zh.md: bc20b5fae6290796af57b3d7fe9425bee14a69c8

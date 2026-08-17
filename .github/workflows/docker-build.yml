@@ -1,7 +1,8 @@
 # Build and push the dsh web container image (Dockerfile at the repository
-# root). Every master push publishes a latest + sha-<short> pair; a v* or
-# dsh-v* tag additionally publishes the tag name. GHCR authentication uses
-# the built-in GITHUB_TOKEN, so no registry secrets are required.
+# root). Every master push publishes latest, the build date (YYYY.MM.DD, UTC),
+# and sha-<short>; a v* or dsh-v* tag additionally publishes the tag name.
+# GHCR authentication uses the built-in GITHUB_TOKEN, so no registry secrets
+# are required.
 name: Docker image
 
 on:
@@ -44,6 +45,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value={{date:'YYYY.MM.DD'}}
             type=sha,prefix=sha-,format=short
             type=ref,event=tag
 
@@ -60,4 +62,5 @@ jobs:
           provenance: false
 
       - name: Image digest
-        run: echo "Pushed ${{ steps.image.outputs.name }} with tags: ${{ steps.meta.outputs.tags }}"
+        run: |
+          echo "Pushed ${{ steps.image.outputs.name }} with tags: ${{ steps.meta.outputs.tags }}"

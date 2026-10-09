@@ -1,7 +1,11 @@
 # ---- Stage 1: Build ----
 FROM node:22-slim AS builder
 
-RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
+# Install build toolchain for native module compilation (cc, make, python for node-gyp)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential python3 make \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable && corepack prepare pnpm@11.7.0 --activate
 
 WORKDIR /app
 

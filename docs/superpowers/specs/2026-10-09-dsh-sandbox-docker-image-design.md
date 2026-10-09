@@ -239,36 +239,24 @@ The full implementation will polish this script and replace the empty `cordis.pa
 
 ### 3. Sandbox integration rows in dsh
 
-The dsh web-app's `cordis.patch.yml` (in `packages/bundle/web-app/cordis.patch.yml`) currently disables several cloud-only rows. The image's `entrypoint-sandbox.sh` writes a *profile-level* `cordis.patch.yml` (in `${DSH_HOME}/profiles/web/`) that:
+The image's `entrypoint-sandbox.sh` writes a *profile-level* `cordis.patch.yml` (in `${DSH_HOME}/profiles/web/`) whose single `insert` adds an `@deepseek-ai/dsh-mcp-client` row (the package is a root devDependency, so its symlink is already under `/app/node_modules`; the row shape follows `docs/user/guide/mcp-memory.md`):
 
-- **Re-enables `web-fetch-http`** (currently disabled in the web-app's offline-deployment patch) — scoped to `127.0.0.1:8090` only via `allowedHosts`.
-- **Adds an `mcp-resources` row** (or its actual shipped name) pointing at the sandbox's MCP hub at `127.0.0.1:8079` via streamable-HTTP transport.
-
-The exact bundle names will be confirmed during implementation by grepping `packages/bundle/` and `packages/mcp/`.
-
-### 4. `.dockerignore` (modified)
-
-Add `.git/HEAD` and `.git/refs/heads/*` to the allowlist so the desktop bundle step's `git rev-parse HEAD` succeeds inside the builder stage. The rest of the build context stays the same.
-
+```yaml
+- insert:
+    - id: mcp-sandbox
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: sandbox
+        transport: streamable-http
+        url: 'http://127.0.0.1:8090/mcp'
+        # headers: { X-AIO-API-Key: ... } written only when SANDBOX_API_KEY is set
 ```
-node_modules
-.git
-.claude
-.agents
-benchmarks
-.LEGACY
-docs/**
-!docs/persistence-schema.json
-website/node_modules
-website/public
-website/.vitepress
-website/tests
-snapshots/**
-!snapshots/session/session-query-spill
-!snapshots/session/web-search-endpoint-guidance
-!snapshots/session/loopback-fixture-server.mjs
-!snapshots/session/loopback-fixture-server.spec.ts
-```
+
+The URL defaults to the sandbox's documented public MCP path (`{public}/mcp`, streamable-HTTP) and is overridable at first boot via `DSH_SANDBOX_MCP_URL`. `web-fetch-http` stays disabled: the plugin's Config has no host-allowlist field, `tool-web` is preset-owned on the web profile, and the MCP row alone carries the direct-operation requirement (file/shell/browser/markitdown tools).
+
+### 4. `.dockerignore` (unchanged)
+
+The build context keeps excluding `.git`. The desktop bundle step's `git rev-parse HEAD` dependency is removed instead: `scripts/client-build-environment.ts` runs git only inside `repositoryClientBuildEnvironment`, which `apps/desktop/tsdown.config.ts` calls only when `DSH_CLIENT_VERSION` is unset. The builder stage sets `DSH_CLIENT_VERSION` (default `0.2.1-alpha.1`) and CI passes the real commit through the `DSH_CLIENT_COMMIT_HASH` build arg, so no `.git` files enter the context and `git` leaves the apt install.
 
 ### 5. `scripts/entrypoint-web.sh` (removed)
 
@@ -326,16 +314,16 @@ The new `scripts/entrypoint-sandbox.sh` supersedes it. The old file is removed i
 
 ## Risks and mitigations
 
-| Risk | Mitigation |
+| Risk | Resolution (smoke-tested 2026-10-09) |
 |---|---|
-| Sandbox image's ENTRYPOINT doesn't honor `PUBLIC_PORT` env var | Test during implementation; if it doesn't, override the entrypoint with a shell that sets up a `socat` forwarder from 8080 to 8090 (or, conversely, from 8090 to 8080 and have dsh listen on 8081) |
-| Sandbox image runs as a non-root user, and the dsh install step needs root | `USER root` for `apt-get`, `corepack`, and writing into `/app`. If the sandbox user cannot write to `/app`, keep root for the entrypoint. The published image's `WORKSPACE` (`/home/gem`) is unrelated and unaffected. |
-| `mcp-resources` and `web-fetch-http` bundle names don't match my guesses | Implementation will grep `packages/bundle/` and `packages/mcp/` to find the actual names and config schemas |
-| `web-fetch-http` is currently disabled in the offline patch | The profile-level patch re-enables it scoped to `127.0.0.1:8090` only; the offline-deployment patch's disable is for the *web-app* default, and the profile-level patch is layered on top |
-| MCP transport: dsh's `mcp-resources` row may expect stdio, not HTTP | Implementation will read the row's config schema; if it doesn't support HTTP, we wrap the sandbox's MCP hub in a small stdio shim (a Node script in the image) |
-| Two processes in one container (process supervision) | The entrypoint script handles signal propagation explicitly; both processes die on `docker stop`. This is simpler than s6-overlay for a two-process container. |
-| Sandbox image's `WORKSPACE` and dsh's `DSH_HOME` differ | Sandbox uses `/home/gem`; dsh uses `/dsh-home`. We keep them separate; dsh calls into the sandbox's HTTP API for file ops and never touches `/home/gem` directly. The user mounts `/dsh-home` for dsh's persistence and `/home/gem` (or the sandbox's volume) for the sandbox's persistence separately. |
-| Pre-existing `git rev-parse` build failure | Fixed by the `.dockerignore` allowlist change in step 4 above. |
+| Sandbox image's ENTRYPOINT doesn't honor `PUBLIC_PORT` env var | **Resolved:** run.sh honors it — "The sandbox is listening on 0.0.0.0:8090" |
+| Sandbox image runs as a non-root user, and the dsh install step needs root | **Resolved:** image config sets no `User`; install ran as root, run.sh handles its own gem-user switching |
+| `mcp-resources` and `web-fetch-http` bundle names don't match my guesses | **Resolved:** integration uses an `@deepseek-ai/dsh-mcp-client` insert row (shape per `docs/user/guide/mcp-memory.md`); `web-fetch-http` dropped (no host-allowlist config) |
+| `web-fetch-http` is currently disabled in the offline patch | **Resolved by dropping it** — the MCP row carries the sandbox integration |
+| MCP transport: dsh's row may expect stdio, not HTTP | **Resolved:** `mcp-client` supports `streamable-http`; the sandbox's `/mcp` answered a proper `initialize` POST with 200 ("Sandbox MCP Tools" 2.14.7) |
+| Two processes in one container (process supervision) | **Resolved:** entrypoint starts run.sh in the background, exec's dsh as PID 1; `docker stop` tears down both in 0.5 s |
+| Sandbox image's `WORKSPACE` and dsh's `DSH_HOME` differ | Kept separate by design: dsh persists under `/dsh-home`, sandbox under `/home/gem`; file access goes through the MCP/HTTP APIs |
+| Pre-existing `git rev-parse` build failure | **Resolved:** `DSH_CLIENT_VERSION` env in the builder skips the git path entirely; `.dockerignore` unchanged |
 
 ## Out of scope
 

@@ -23,7 +23,7 @@ COPY . .
 # `apps/cli/src/bin.ts` and its dependencies remain type-safe.
 RUN pnpm install --frozen-lockfile \
     && pnpm run build:native-system \
-    && tsdown --config-loader native --env.DSH_BUILD_FACE host \
+    && pnpm exec tsdown --config-loader native --env.DSH_BUILD_FACE host \
     && pnpm run build:lib:client \
     && pnpm run build:web
 

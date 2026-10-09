@@ -2,8 +2,19 @@ node_modules
 .git
 .claude
 .agents
-docs
-website
 benchmarks
 snapshots
 .LEGACY
+# website/ is excluded from the runtime image, but its build.ts
+# and docs.ts are imported at type-check time by
+# scripts/project-doc-site.{ts,spec.ts} (tsc -b includes them via
+# tsconfig.host.json). The heavy subdirectories stay out.
+website/node_modules
+website/public
+website/.vitepress
+website/tests
+# docs/ is excluded from the runtime image, but its
+# persistence-schema.json is read at type-check time by
+# scripts/persistence-developer.spec.ts.
+docs/**
+!docs/persistence-schema.json

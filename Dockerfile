@@ -22,8 +22,11 @@ WORKDIR /app
 # Copy everything for build
 COPY . .
 
-# Install dependencies and build
-RUN pnpm install --frozen-lockfile \
+# Install dependencies and build. The fetch timeout/retry envs keep large
+# platform tarballs (@openai/codex is the usual one) from aborting the whole
+# install on a slow link.
+RUN npm_config_fetch_timeout=600000 npm_config_fetch_retries=5 \
+    pnpm install --frozen-lockfile \
     && pnpm run build:native-system \
     && pnpm run build:lib:host \
     && pnpm run build:lib:client \

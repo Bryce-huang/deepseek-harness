@@ -22,7 +22,7 @@
 **Files:**
 - Modify: `Dockerfile:1-11` (builder stage header)
 
-- [ ] **Step 1: Edit the builder stage**
+- [x] **Step 1: Edit the builder stage**
 
 Replace lines 1-11 of `Dockerfile`:
 
@@ -53,7 +53,7 @@ WORKDIR /app
 
 Changes: drop `git` from apt-get (only needed for rev-parse, now bypassed); add the two ARGs and ENV.
 
-- [ ] **Step 2: Verify the build context has no .git and the env path is taken**
+- [x] **Step 2: Verify the build context has no .git and the env path is taken**
 
 Run: `grep -c git Dockerfile`
 Expected: `0` (no git references left in the builder install)
@@ -66,7 +66,7 @@ const clientEnvironment = resolveClientBuildEnvironment(process.env.DSH_CLIENT_V
   : process.env)
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add Dockerfile
@@ -80,7 +80,7 @@ git commit -m "fix(docker): satisfy client build metadata via env instead of git
 **Files:**
 - Modify: `Dockerfile` (production stage, currently lines 25-60)
 
-- [ ] **Step 1: Replace the whole production stage**
+- [x] **Step 1: Replace the whole production stage**
 
 Replace everything from `# ---- Stage 2: Production ----` to the end of file with:
 
@@ -141,12 +141,12 @@ Notes baked into this stage:
 - Health-check start period raised to 120s for the sandbox boot.
 - No `git` install in production (nothing needs it).
 
-- [ ] **Step 2: Syntax-sanity check**
+- [x] **Step 2: Syntax-sanity check**
 
 Run: `docker build --check .` (BuildKit lint; if the local Docker lacks `--check`, skip with a note)
 Expected: no errors (warnings about legacy syntax acceptable)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add Dockerfile
@@ -160,7 +160,7 @@ git commit -m "feat(docker): base the runtime image on agent-infra/sandbox 1.11.
 **Files:**
 - Create: `scripts/entrypoint-sandbox.sh`
 
-- [ ] **Step 1: Write the entrypoint**
+- [x] **Step 1: Write the entrypoint**
 
 ```sh
 #!/bin/sh
@@ -308,7 +308,7 @@ trap 'kill -TERM "$SANDBOX_PID" 2>/dev/null || true' TERM INT
 exec node --import tsx/esm apps/cli/src/bin.ts "$@"
 ```
 
-- [ ] **Step 2: Make it executable and syntax-check**
+- [x] **Step 2: Make it executable and syntax-check**
 
 Run: `chmod +x scripts/entrypoint-sandbox.sh && sh -n scripts/entrypoint-sandbox.sh`
 Expected: no output (clean syntax)
@@ -316,7 +316,7 @@ Expected: no output (clean syntax)
 Run: `command -v shellcheck >/dev/null && shellcheck scripts/entrypoint-sandbox.sh || echo "shellcheck unavailable"`
 Expected: no findings, or "shellcheck unavailable"
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/entrypoint-sandbox.sh
@@ -330,12 +330,12 @@ git commit -m "feat(docker): sandbox-supervising entrypoint with MCP profile wir
 **Files:**
 - Delete: `scripts/entrypoint-web.sh`
 
-- [ ] **Step 1: Confirm nothing else references it**
+- [x] **Step 1: Confirm nothing else references it**
 
 Run: `grep -rn "entrypoint-web" --include="*" . 2>/dev/null | grep -v node_modules | grep -v ".git/"`
 Expected: only `Dockerfile` (already updated in Task 2 to copy `entrypoint-sandbox.sh`) — no other references.
 
-- [ ] **Step 2: Delete and commit**
+- [x] **Step 2: Delete and commit**
 
 ```bash
 git rm scripts/entrypoint-web.sh
@@ -349,7 +349,7 @@ git commit -m "chore(docker): drop the standalone-web entrypoint superseded by t
 **Files:**
 - Modify: `.github/workflows/docker-build.yml` (Build and push step)
 
-- [ ] **Step 1: Add build-args to the build-push step**
+- [x] **Step 1: Add build-args to the build-push step**
 
 In `.github/workflows/docker-build.yml`, change:
 
@@ -385,12 +385,12 @@ to:
           cache-to: type=gha,mode=max
 ```
 
-- [ ] **Step 2: Validate the workflow YAML**
+- [x] **Step 2: Validate the workflow YAML**
 
 Run: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/docker-build.yml'))" && echo OK`
 Expected: `OK`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/docker-build.yml
@@ -403,7 +403,7 @@ git commit -m "ci(docker): embed the build commit in client build metadata"
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Build the image**
+- [x] **Step 1: Build the image**
 
 Run: `docker build -t dsh-sandbox:dev .`
 Expected: both stages succeed; the builder completes `pnpm run build:lib:host` without any `git rev-parse` error.
@@ -414,7 +414,7 @@ RUN npm install -g pnpm@11.7.0
 ```
 in place of the corepack line, and re-run.
 
-- [ ] **Step 2: Run the container**
+- [x] **Step 2: Run the container**
 
 Run:
 ```bash
@@ -424,7 +424,7 @@ docker run -d --name dsh-sandbox-smoke \
 ```
 Expected: container starts; `docker logs dsh-sandbox-smoke` shows `dsh-entrypoint: sandbox ready on port 8090` then `dsh-entrypoint: initialized web profile ...` then dsh's URL line.
 
-- [ ] **Step 3: Probe both services**
+- [x] **Step 3: Probe both services**
 
 Run: `curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8080/`
 Expected: `200` (or `401` when `DSH_WEB_PASSWORD` is set — re-test with `-e DSH_WEB_PASSWORD=x` and `curl -u :x` if so)
@@ -432,7 +432,7 @@ Expected: `200` (or `401` when `DSH_WEB_PASSWORD` is set — re-test with `-e DS
 Run: `curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8090/v1/sandbox`
 Expected: `200`
 
-- [ ] **Step 4: Verify the MCP endpoint and profile patch**
+- [x] **Step 4: Verify the MCP endpoint and profile patch**
 
 Run: `docker exec dsh-sandbox-smoke cat /dsh-home/profiles/web/cordis.patch.yml`
 Expected: the `mcp-sandbox` insert row with `url: 'http://127.0.0.1:8090/mcp'`.
@@ -440,12 +440,12 @@ Expected: the `mcp-sandbox` insert row with `url: 'http://127.0.0.1:8090/mcp'`.
 Run: `docker exec dsh-sandbox-smoke node -e "fetch('http://127.0.0.1:8090/mcp').then(r=>console.log('status',r.status)).catch(e=>console.log('err',e.message))"`
 Expected: an HTTP status (any code — the endpoint answers; a streamable-HTTP MCP server typically 40x's a bare GET). If it errors with connection refused, inspect the sandbox's routing (`docker exec dsh-sandbox-smoke sh -c 'command -v ss >/dev/null && ss -ltnp || netstat -ltnp'`) and record the finding.
 
-- [ ] **Step 5: Verify teardown**
+- [x] **Step 5: Verify teardown**
 
 Run: `docker stop -t 15 dsh-sandbox-smoke && docker rm dsh-sandbox-smoke`
 Expected: stops within the grace period (exit 0, no timeout kill message).
 
-- [ ] **Step 6: Record smoke results**
+- [x] **Step 6: Record smoke results**
 
 Append findings (especially any Step 4 endpoint correction) to this plan file as a "Smoke results" note under this task, and adjust `DSH_SANDBOX_MCP_URL` in `Dockerfile` + the entrypoint default if the documented path proved wrong. Commit any adjustment:
 
@@ -461,14 +461,14 @@ git commit -m "fix(docker): correct the sandbox MCP endpoint after smoke test"
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-09-dsh-sandbox-docker-image-design.md`
 
-- [ ] **Step 1: Amend the spec's provisional parts**
+- [x] **Step 1: Amend the spec's provisional parts**
 
 Edit the spec:
 - Replace the `.dockerignore` allowlist section (section 4) with a note that the git dependency was removed via `DSH_CLIENT_VERSION` and `.dockerignore` is unchanged.
 - Replace the "Sandbox integration rows" section (section 3) with the verified `mcp-sandbox` insert row and drop the `web-fetch-http` re-enable (reason: no host-allowlist config exists; MCP carries the integration).
 - Refresh the Risks table rows that the smoke test resolved.
 
-- [ ] **Step 2: Commit and push the branch**
+- [x] **Step 2: Commit and push the branch**
 
 ```bash
 git add docs/superpowers/specs/2026-10-09-dsh-sandbox-docker-image-design.md docs/superpowers/plans/2026-10-09-dsh-sandbox-docker-image.md
@@ -478,7 +478,7 @@ git push origin master
 
 Pushing master triggers `.github/workflows/docker-build.yml`, which builds and pushes `brycehuang/deepseek-harness` (unique date+SHA tag plus `latest`) using the Docker Hub credentials already stored in repo secrets.
 
-- [ ] **Step 3: Confirm the CI image published**
+- [x] **Step 3: Confirm the CI image published**
 
 Run: `gh run watch $(gh run list --workflow=docker-build.yml --limit 1 --json databaseId --jq '.[0].databaseId') --exit-status`
 Expected: the workflow completes successfully.
@@ -495,3 +495,16 @@ Expected: the workflow completes successfully.
 | Model gets sandbox tools over MCP | Task 6 Step 4 (endpoint + profile patch) |
 | Clean shutdown of both processes | Task 6 Step 5 |
 | CI publishes the image | Task 5 + Task 7 Step 3 |
+
+---
+
+## Smoke results (2026-10-09, local arm64)
+
+- Builder: `build:lib:host` passed with **no git involvement** (`DSH_CLIENT_VERSION` env path confirmed; 0 git errors in the build log).
+- One local-only fix folded into the Dockerfile: `npm_config_fetch_timeout=600000 npm_config_fetch_retries=5` on the install line — the `@openai/codex` platform tarball repeatedly stalled past pnpm's default fetch timeout on a slow link. No effect on CI.
+- Sandbox stack: boots via `/opt/gem/run.sh`, honors `PUBLIC_PORT=8090` ("The sandbox is listening on 0.0.0.0:8090"), full supervisord tree RUNNING (browser MCP server, VNC, websocat, openbox).
+- Entrypoint: "sandbox ready on port 8090" ~5 s after boot; profile patch written exactly as designed.
+- dsh: binds 8080 as PID 1; bare `/` answers **401 (shipped per-boot token auth — the plan's "200" expectation was wrong)**; with `?token=…` it answers 303 (cookie-set redirect). One benign warning: `account-controller` pending on the offline-disabled `deepseekAccount`.
+- MCP: bare GET → 406 (protocol headers required); proper `initialize` POST → **200, serverInfo "Sandbox MCP Tools" 2.14.7**, tools/prompts/resources capabilities.
+- Teardown: `docker stop` completes in **0.49 s** — both processes exit with the container.
+- `DSH_SANDBOX_MCP_URL` default (`http://127.0.0.1:8090/mcp`) verified correct; no adjustment needed.

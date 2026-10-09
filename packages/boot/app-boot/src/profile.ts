@@ -181,6 +181,19 @@ export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
     bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-acp-app'],
   },
   web: {
+    // The shipped web profile: dsh-base rows plus the web-app overlay.
+    // The dsh-base layer declares every optional bundle's runtime
+    // dependency, so `dsh plugin` (or the Web Plugins page) can
+    // install an optional bundle into a custom profile without
+    // another download. The Docker image additionally bakes the
+    // offline-friendly optional bundles into /app/node_modules and
+    // pre-populates the web profile's bundle list through
+    // scripts/entrypoint-web.sh on first boot; the offline-deployment
+    // gates in packages/bundle/web-app/cordis.patch.yml disable the
+    // cloud-only base rows (`deepseek-account`, `web-search-deepseek`,
+    // `plugin-package-inventory-deepseek`, `llm-deepseek*`, etc.) so
+    // a fresh web boot does not require the user to hand-disable
+    // them through the Plugins page.
     bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
   },
   headless: {

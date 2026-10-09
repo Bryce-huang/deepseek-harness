@@ -69,9 +69,10 @@ export interface Config {
   /** Minimum known response length eligible for gzip; unknown-length streams are eligible. @default 1024 */
   compressionThresholdBytes?: number
   /**
-   * Optional HTTP Basic Auth password. When set, every request (including
-   * WebSocket upgrades) must carry valid Basic Auth credentials (any username,
-   * this password). When unset or empty, no Basic Auth is applied.
+   * HTTP Basic Auth password. When non-empty, every request (including
+   * WebSocket upgrades) must carry valid Basic Auth credentials (any
+   * username, this password). When empty, no Basic Auth is applied.
+   * @default ''
    */
   basicAuthPassword?: string
 }
@@ -84,6 +85,7 @@ interface ResolvedConfig extends Config {
   compression: 'none' | 'gzip'
   compressionLevel: number
   compressionThresholdBytes: number
+  basicAuthPassword: string
 }
 
 type NodeMiddleware = (
@@ -178,7 +180,12 @@ export class WebServer extends Service {
     compression: z.union([z.const('none'), z.const('gzip')]).default(DEFAULT_COMPRESSION),
     compressionLevel: z.number().step(1).min(0).max(9).default(DEFAULT_COMPRESSION_LEVEL),
     compressionThresholdBytes: z.natural().default(DEFAULT_COMPRESSION_THRESHOLD_BYTES),
-    basicAuthPassword: z.string().optional(),
+    // When set to a non-empty string, gates every HTTP and WebSocket
+    // request with HTTP Basic Auth (the password is the entire user-info
+    // portion; the user name is ignored). An empty string disables
+    // the gate so deployments that do not need it can leave the
+    // config empty without having to remove the row.
+    basicAuthPassword: z.string().default(''),
   })
 
   private readonly exact = new Map<string, WebRoute>()
@@ -190,13 +197,18 @@ export class WebServer extends Service {
   private server!: Server
   private listenedPort!: number
   private readonly gzip: NodeMiddleware | undefined
-  private readonly basicAuth: NodeMiddleware | undefined
+  private readonly basicAuth: { middleware: NodeMiddleware, expectedPasswordBytes: Buffer } | undefined
 
   constructor(ctx: Context, private config: Config) {
     super(ctx, 'webServer')
     const resolved = config as ResolvedConfig
     this.gzip = resolved.compression === 'gzip' ? createGzipMiddleware(resolved) : undefined
-    this.basicAuth = resolved.basicAuthPassword ? createBasicAuthMiddleware(resolved.basicAuthPassword) : undefined
+    this.basicAuth = resolved.basicAuthPassword
+      ? {
+        middleware: createBasicAuthMiddleware(resolved.basicAuthPassword),
+        expectedPasswordBytes: Buffer.from(resolved.basicAuthPassword, 'utf8'),
+      }
+      : undefined
   }
 
   /** The listening port (the OS-assigned value when config.port is 0). */
@@ -309,7 +321,7 @@ export class WebServer extends Service {
         else this.gzip(req, res, next)
       }
       if (this.basicAuth === undefined) afterAuth()
-      else this.basicAuth(req, res, afterAuth)
+      else this.basicAuth.middleware(req, res, afterAuth)
     })
     this.server.on('upgrade', (req, socket, head) => {
       // Basic Auth gate for WebSocket upgrades
@@ -333,7 +345,7 @@ export class WebServer extends Service {
         }
         const providedPassword = decoded.slice(colonIndex + 1)
         const providedBytes = Buffer.from(providedPassword, 'utf8')
-        const expectedBytes = Buffer.from(this.config.basicAuthPassword!, 'utf8')
+        const expectedBytes = this.basicAuth.expectedPasswordBytes
         if (providedBytes.byteLength !== expectedBytes.byteLength
           || !timingSafeEqual(providedBytes, expectedBytes)) {
           socket.destroy()

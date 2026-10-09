@@ -566,7 +566,10 @@
   disabled: true
 
 - id: agent-instructions
-  disabled: true
+  # Re-enabled for the offline web deployment: the local workspace
+  # AGENTS.md/CLAUDE.md instructions ship with the user, and the
+  # dsh-base row is otherwise host-plane-disabled by every preset.
+  disabled: false
 
 - id: tool-todo
   disabled: true
@@ -582,3 +585,46 @@
       name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: standard
+
+# ── offline-deployment gates ──────────────────────────────────────────────
+#
+# The dsh-base layer registers rows that talk to the DeepSeek platform
+# (account, telemetry, plugin registry, web search, etc.). The shipped web
+# profile runs with no internet access; the rows below disable every base
+# row whose runtime needs the platform, so a fresh boot does not require
+# the user to hand-disable them through the Plugins page. dsh-base still
+# owns their packages, so a different profile (the desktop, for example)
+# re-enables them by patching them back.
+
+- id: deepseek-account
+  disabled: true
+
+- id: deepseek-llm-api-extensions
+  disabled: true
+
+- id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true
+
+- id: web-search-deepseek
+  disabled: true
+
+- id: web-fetch-http
+  disabled: true
+
+- id: plugin-package-inventory-deepseek
+  disabled: true
+
+- id: session-log-deepseek
+  disabled: true
+
+# The session telemetry exporter (otlp/grpc) is harmless when unset
+# (the launcher honors DSH_TELEMETRY_DISABLED), but the open-port listener
+# still binds; the offline profile keeps the table but no exporter.
+- id: session-telemetry-otel
+  disabled: true
+
+- id: otel
+  disabled: true

@@ -1,9 +1,12 @@
 # ---- Stage 1: Build ----
 FROM node:22-slim AS builder
 
-# Install build toolchain for native module compilation (cc, make, python for node-gyp)
+# Install build toolchain for native module compilation (cc, make, python for
+# node-gyp). git is needed because @deepseek-ai/dsh-desktop's tsdown config
+# shells out to `git rev-parse` to record the build commit hash, and a
+# desktop bundle step runs as part of `build:lib:host`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential python3 make \
+      build-essential python3 make git \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable && corepack prepare pnpm@11.7.0 --activate
 

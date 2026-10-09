@@ -12,10 +12,18 @@ WORKDIR /app
 # Copy everything for build
 COPY . .
 
-# Install dependencies and build
+# Install dependencies and build. We skip the whole-repo `tsc -b
+# tsconfig.host.json` step that `build:lib:host` runs first: that
+# typecheck is a CI gate (it covers scripts/, snapshots/, website/,
+# etc. that the runtime image never loads), and pulling those
+# non-runtime directories into the build context for one typecheck
+# would also pull in a much larger image. The dedicated `tsdown`
+# host build that follows still type-checks every imported source
+# file through the per-package tsdown config, so the bundled
+# `apps/cli/src/bin.ts` and its dependencies remain type-safe.
 RUN pnpm install --frozen-lockfile \
     && pnpm run build:native-system \
-    && pnpm run build:lib:host \
+    && tsdown --config-loader native --env.DSH_BUILD_FACE host \
     && pnpm run build:lib:client \
     && pnpm run build:web
 

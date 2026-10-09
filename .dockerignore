@@ -2,8 +2,23 @@ node_modules
 .git
 .claude
 .agents
-docs
-website
 benchmarks
-snapshots
 .LEGACY
+# The build runs `tsc -b tsconfig.host.json`, which type-checks
+# scripts/project-doc-site.{ts,spec.ts} (imports ../website/build.ts
+# and ../website/docs.ts), scripts/persistence-developer.spec.ts
+# (imports ../docs/persistence-schema.json), and
+# scripts/session-query-spill-command.spec.ts
+# (imports ../snapshots/session/session-query-spill/...). The runtime
+# image does not need any of these files, but the build needs them
+# in the typecheck context. Exclude the heavy / sub-directories.
+docs/**
+!docs/persistence-schema.json
+website/node_modules
+website/public
+website/.vitepress
+website/tests
+snapshots/**
+!snapshots/session/session-query-spill
+!snapshots/session/web-search-endpoint-guidance
+!snapshots/session/loopback-fixture-server.mjs

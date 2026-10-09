@@ -32,10 +32,10 @@ ENV DSH_ALLOW_ALL_INTERFACES=1
 ENV DSH_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-EXPOSE 3080
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "fetch('http://localhost:3080/').catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://localhost:8080/').catch(()=>process.exit(1))"
 
 ENTRYPOINT ["node", "--import", "tsx/esm", "apps/cli/src/bin.ts"]
-CMD ["web", "--host", "0.0.0.0", "--port", "3080", "--no-open"]
+CMD ["web", "--host", "0.0.0.0", "--port", "8080", "--no-open"]

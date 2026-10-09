@@ -2,13 +2,20 @@
 FROM node:22-slim AS builder
 
 # Install build toolchain for native module compilation (cc, make, python for
-# node-gyp). git is needed because @deepseek-ai/dsh-desktop's tsdown config
-# shells out to `git rev-parse` to record the build commit hash, and a
-# desktop bundle step runs as part of `build:lib:host`.
+# node-gyp).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential python3 make git \
+      build-essential python3 make \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable && corepack prepare pnpm@11.7.0 --activate
+
+# The desktop tsdown step embeds client build metadata and runs `git rev-parse`
+# when DSH_CLIENT_VERSION is unset (scripts/client-build-environment.ts). The
+# build context excludes .git, so pin the version env instead; CI passes the
+# real commit hash through the DSH_CLIENT_COMMIT_HASH build arg.
+ARG DSH_CLIENT_COMMIT_HASH=
+ARG DSH_CLIENT_VERSION=0.2.1-alpha.1
+ENV DSH_CLIENT_COMMIT_HASH=${DSH_CLIENT_COMMIT_HASH} \
+    DSH_CLIENT_VERSION=${DSH_CLIENT_VERSION}
 
 WORKDIR /app
 

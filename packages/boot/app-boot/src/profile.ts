@@ -187,8 +187,9 @@ export const PROFILE_TEMPLATES: Record<string, ProfileTemplate> = {
     // install an optional bundle into a custom profile without
     // another download. The Docker image additionally bakes the
     // offline-friendly optional bundles into /app/node_modules and
-    // pre-populates the web profile's bundle list through
-    // scripts/entrypoint-web.sh on first boot; the offline-deployment
+    // pre-populates the web profile's bundle list (plus the sandbox
+    // MCP row) through scripts/entrypoint-sandbox.sh on first boot;
+    // the offline-deployment
     // gates in packages/bundle/web-app/cordis.patch.yml disable the
     // cloud-only base rows (`deepseek-account`, `web-search-deepseek`,
     // `plugin-package-inventory-deepseek`, `llm-deepseek*`, etc.) so

@@ -29,10 +29,22 @@ RUN pnpm install --frozen-lockfile \
     && pnpm run build:lib:client \
     && pnpm run build:web
 
-# ---- Stage 2: Production ----
-FROM node:22-slim AS production
+# ---- Stage 2: Production on the agent-infra sandbox ----
+# The published sandbox image (ENTRYPOINT /opt/gem/run.sh, default PUBLIC_PORT
+# 8080) carries the browser, VNC, code-server, jupyter, shell/file MCP stack.
+# dsh becomes the container's main service on 8080; the sandbox's public
+# listener moves to 8090. Its MCP endpoint is then
+# http://127.0.0.1:8090/mcp (streamable-HTTP), reached by the profile patch
+# the entrypoint writes on first boot.
+FROM ghcr.io/agent-infra/sandbox:1.11.0
 
-RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
+# Root for the install steps below: corepack needs a writable install root,
+# and /app must be creatable. The sandbox's own run.sh handles its user
+# switching internally.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable && corepack prepare pnpm@11.7.0 --activate
 
 WORKDIR /app
 
@@ -41,26 +53,27 @@ WORKDIR /app
 # and pnpm workspace resolution requires the full structure.
 COPY --from=builder /app /app
 
-# Offline-first entrypoint: the CLI image ships every optional bundle
-# (agent-team-profile, auto-review, ptc-runtime-python) as a runtime
-# dependency, so its symlinks live under /app/node_modules before
-# the first boot. The script below adds them to the active profile's
-# dsh.profile.bundles list without contacting the registry, then
-# exec's the dsh web command. The cloud-only base rows (DeepSeek
-# account, web search, plugin registry, etc.) are disabled by the
-# web-app's cordis.patch.yml — see packages/bundle/web-app/cordis.patch.yml.
-COPY scripts/entrypoint-web.sh /usr/local/bin/dsh-entrypoint
+# Offline-first entrypoint: starts the sandbox, waits for its API, pre-creates
+# the web profile (offline optional bundles plus the sandbox MCP row), and
+# exec's the dsh web command. See scripts/entrypoint-sandbox.sh.
+COPY scripts/entrypoint-sandbox.sh /usr/local/bin/dsh-entrypoint
 RUN chmod +x /usr/local/bin/dsh-entrypoint
 
-# Docker deployment defaults
-ENV DSH_ALLOW_ALL_INTERFACES=1
-ENV DSH_TELEMETRY_DISABLED=1
-ENV DSH_HOME=/dsh-home
-ENV NODE_ENV=production
+# dsh owns 8080; the sandbox's public listener moves to 8090. The remaining
+# sandbox ports keep their image defaults (MCP hub 8079, gem 8088, code-server
+# 8200, VNC 5900).
+ENV PUBLIC_PORT=8090 \
+    DSH_ALLOW_ALL_INTERFACES=1 \
+    DSH_TELEMETRY_DISABLED=1 \
+    DSH_HOME=/dsh-home \
+    NODE_ENV=production \
+    DSH_SANDBOX_MCP_URL=http://127.0.0.1:8090/mcp
 
-EXPOSE 8080
+EXPOSE 8080 8090
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+# dsh binds 8080 only after the sandbox stack is up, so the start period
+# covers the sandbox boot too (its own WAIT_PORTS gate plus service starts).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
   CMD node -e "fetch('http://localhost:8080/').catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]

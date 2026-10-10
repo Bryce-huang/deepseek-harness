@@ -1,3 +1,8 @@
+# Runtime base selection: the pinned sandbox release by default; CI also
+# builds the tracking variant with
+# --build-arg SANDBOX_IMAGE=ghcr.io/agent-infra/sandbox:latest.
+ARG SANDBOX_IMAGE=ghcr.io/agent-infra/sandbox:1.11.0
+
 # ---- Stage 1: Build ----
 FROM node:22-slim AS builder
 
@@ -39,7 +44,7 @@ RUN npm_config_fetch_timeout=600000 npm_config_fetch_retries=5 \
 # listener moves to 8090. Its MCP endpoint is then
 # http://127.0.0.1:8090/mcp (streamable-HTTP), reached by the profile patch
 # the entrypoint writes on first boot.
-FROM ghcr.io/agent-infra/sandbox:1.11.0
+FROM ${SANDBOX_IMAGE}
 
 # Root for the install steps below: corepack needs a writable install root,
 # and /app must be creatable. The sandbox's own run.sh handles its user
@@ -65,12 +70,23 @@ RUN chmod +x /usr/local/bin/dsh-entrypoint
 # dsh owns 8080; the sandbox's public listener moves to 8090. The remaining
 # sandbox ports keep their image defaults (MCP hub 8079, gem 8088, code-server
 # 8200, VNC 5900).
+#
+# USER_UID/USER_GID retarget the sandbox's internal user creation from the
+# image default (1000/1000) to the deployment's app user: run.sh creates its
+# user from these envs and chowns /home/gem, so every sandbox service runs
+# uid 6001 / gid 6000, and the entrypoint drops dsh to the same ids.
 ENV PUBLIC_PORT=8090 \
+    USER_UID=6001 \
+    USER_GID=6000 \
     DSH_ALLOW_ALL_INTERFACES=1 \
     DSH_TELEMETRY_DISABLED=1 \
     DSH_HOME=/dsh-home \
     NODE_ENV=production \
     DSH_SANDBOX_MCP_URL=http://127.0.0.1:8090/mcp
+
+# dsh's persistent state (profiles, sessions) lives here, owned by the app
+# user; numeric ids need no passwd entry at build time.
+RUN mkdir -p /dsh-home && chown 6001:6000 /dsh-home
 
 EXPOSE 8080 8090
 

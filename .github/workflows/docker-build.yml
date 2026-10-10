@@ -17,6 +17,21 @@ jobs:
       contents: read
       packages: write
 
+    # Two variants of the runtime base: the pinned sandbox release (default
+    # `latest` image tags) and the tracking sandbox `latest` release
+    # (`sandbox-latest` suffixed tags). Each variant keeps its own unique
+    # date+SHA tag.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - base: ghcr.io/agent-infra/sandbox:1.11.0
+            suffix: ''
+            alias: latest
+          - base: ghcr.io/agent-infra/sandbox:latest
+            suffix: '-sandbox-latest'
+            alias: sandbox-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,26 +58,16 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=
-            type=semver,pattern={{version}}
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
-            ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}${{ matrix.suffix }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.alias }}
           build-args: |
+            SANDBOX_IMAGE=${{ matrix.base }}
             DSH_CLIENT_COMMIT_HASH=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=build-${{ matrix.alias }}
+          cache-to: type=gha,mode=max,scope=build-${{ matrix.alias }}

@@ -8,6 +8,12 @@
 # answers, pre-creates the dsh web profile on first boot, and exec's dsh so
 # signals reach it directly; a trap forwards SIGTERM/SIGINT to the sandbox.
 #
+# Everything runs as the deployment's app user, uid 6001 / gid 6000: the
+# sandbox's run.sh builds its internal user from USER_UID/USER_GID, and dsh
+# is dropped to the same ids (numeric setpriv, no passwd entry required)
+# when the container starts as root; a container started --user 6001:6000
+# exec's directly.
+#
 # First-boot profile contents:
 # - the offline-friendly optional bundles (same list the standalone image
 #   shipped; DSH_OFFLINE_BUNDLES=skip keeps the plain web template),
@@ -134,10 +140,36 @@ EOF
   echo "dsh-entrypoint: initialized ${PROFILE} profile with sandbox MCP row (${MCP_URL})"
 fi
 
+# Hand dsh's state tree to the app user: the profile files above were written
+# by whichever uid started the container, and dsh rewrites them at runtime.
+if [ "$(id -u)" = "0" ]; then
+  chown -R "${USER_UID:-6001}:${USER_GID:-6000}" "${DSH_HOME}"
+fi
+
 # ── signal propagation ──────────────────────────────────────────────────────
 # dsh runs as this script's replacement (exec), so TERM/INT reach it
 # directly; the trap covers only the pre-exec startup window. After exec,
 # dsh is PID 1 and the sandbox dies with the container when it exits.
 trap 'kill -TERM "$SANDBOX_PID" 2>/dev/null || true' TERM INT
 
-exec node --import tsx/esm apps/cli/src/bin.ts "$@"
+# ── run dsh under the app user (uid 6001 / gid 6000) ────────────────────────
+# The sandbox's run.sh has already created that uid from USER_UID/USER_GID
+# and chowned /home/gem. dsh shares the sandbox workspace as its default
+# cwd so dsh's file tools, the browser, and the shell all see the same
+# files; the tsx loader and CLI paths are absolute because bare-specifier
+# resolution would start from the new cwd (/home/gem has no node_modules).
+if [ -d /home/gem ]; then
+  cd /home/gem
+  HOME=/home/gem
+  export HOME
+  # tsx discovers its tsconfig (the source-launch paths map) from the cwd;
+  # pin it to the repo root so the cd cannot change module resolution.
+  TSX_TSCONFIG_PATH=/app/tsconfig.json
+  export TSX_TSCONFIG_PATH
+fi
+
+if [ "$(id -u)" = "0" ]; then
+  exec setpriv --reuid="${USER_UID:-6001}" --regid="${USER_GID:-6000}" --clear-groups \
+    node --import /app/node_modules/tsx/dist/esm/index.mjs /app/apps/cli/src/bin.ts "$@"
+fi
+exec node --import /app/node_modules/tsx/dist/esm/index.mjs /app/apps/cli/src/bin.ts "$@"

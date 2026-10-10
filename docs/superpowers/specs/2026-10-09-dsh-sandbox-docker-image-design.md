@@ -50,7 +50,7 @@ Both processes run in one container. They share `localhost` and the sandbox's `W
 
 | Decision | Value | Why |
 |---|---|---|
-| Base image | `ghcr.io/agent-infra/sandbox:1.11.0` | Pinned, reproducible, no need to track `latest` |
+| Base image | `ghcr.io/agent-infra/sandbox:1.11.0` (default) + `:latest` tracking variant | CI matrix builds both via the `SANDBOX_IMAGE` build arg: `latest`/`<date>-<sha>` tags for the pinned base, `sandbox-latest`/`<date>-<sha>-sandbox-latest` for the tracking base |
 | dsh listen port | 8080 | Main service (user's hard requirement) |
 | Sandbox `PUBLIC_PORT` | 8090 | Frees 8080 for dsh; admin UI still reachable |
 | MCP wiring | dsh `mcp-resources` → `http://127.0.0.1:8079` | Direct MCP hub, no proxy hop |
@@ -60,6 +60,7 @@ Both processes run in one container. They share `localhost` and the sandbox's `W
 | Auth | `DSH_WEB_PASSWORD` env var (Basic Auth on dsh) | Unchanged from current behavior; sandbox auth (`SANDBOX_API_KEY`) is independent |
 | Telemetry | `DSH_TELEMETRY_DISABLED=1` | Unchanged |
 | Process model | One container, two processes, foreground/background | Simpler than s6-overlay; signal propagation is explicit in the entrypoint script |
+| App user | uid 6001 / gid 6000 everywhere | The deployment runs workloads as the app user: the sandbox's `run.sh` builds its internal user from `USER_UID`/`USER_GID` (set to 6001/6000), and the entrypoint drops dsh to the same ids via numeric `setpriv` when the container starts as root |
 
 ## Components
 
@@ -324,6 +325,8 @@ The new `scripts/entrypoint-sandbox.sh` supersedes it. The old file is removed i
 | Two processes in one container (process supervision) | **Resolved:** entrypoint starts run.sh in the background, exec's dsh as PID 1; `docker stop` tears down both in 0.5 s |
 | Sandbox image's `WORKSPACE` and dsh's `DSH_HOME` differ | Kept separate by design: dsh persists under `/dsh-home`, sandbox under `/home/gem`; file access goes through the MCP/HTTP APIs |
 | Pre-existing `git rev-parse` build failure | **Resolved:** `DSH_CLIENT_VERSION` env in the builder skips the git path entirely; `.dockerignore` unchanged |
+| `docker run --user 6001:6000` (non-root container start) | **Vendor limitation, documented:** the sandbox's `gem_init.sh`/`gem.sh` run unguarded `mkdir /var/run/gem`, `useradd`, and `chown root:gem` during boot, so a non-root PID 1 aborts under `set -e` — stock `agent-infra/sandbox` fails the same way. Supported mode: start as root; after boot dsh is PID 1 as uid 6001 and every sandbox service runs as gem=6001/6000; root persists only in the vendor's supervisord (their trust model) |
+| dsh workspace under the app user | **Resolved:** the entrypoint cds to `/home/gem` (shared with the sandbox) before exec and pins `TSX_TSCONFIG_PATH=/app/tsconfig.json` plus absolute tsx/CLI paths — the cwd moves every `process.cwd()`-derived workspace root at once without breaking the source-launch module resolution |
 
 ## Out of scope
 

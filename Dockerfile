@@ -88,6 +88,24 @@ ENV PUBLIC_PORT=8090 \
 # user; numeric ids need no passwd entry at build time.
 RUN mkdir -p /dsh-home && chown 6001:6000 /dsh-home
 
+# Non-root start support (docker run --user 6001:6000): pre-create the app
+# user so uid 6001 resolves to a name (sudoers matches by name; docker sets
+# HOME from the passwd entry) and grant it passwordless sudo. A non-root
+# start re-elevates the sandbox boot through that entry (the boot needs
+# root: user creation, pidfiles, nginx); the services it spawns still run as
+# the app user via their program-level user= directives. A root start never
+# uses this entry — the vendor boot writes the same grant itself.
+RUN groupadd --gid 6000 gem \
+    && useradd --uid 6001 --gid 6000 --shell /bin/bash --create-home --no-log-init gem \
+    && printf 'gem ALL=(ALL) NOPASSWD:SETENV:ALL\n' > /etc/sudoers.d/gem \
+    && chmod 440 /etc/sudoers.d/gem
+
+# The app user (uid 6001 / gid 6000) is the image's default runtime
+# identity; the entrypoint re-elevates the sandbox boot via sudo from it.
+# `docker run --user 0` keeps the root path (direct boot, setpriv drop for
+# dsh).
+USER 6001:6000
+
 EXPOSE 8080 8090
 
 # dsh binds 8080 only after the sandbox stack is up, so the start period

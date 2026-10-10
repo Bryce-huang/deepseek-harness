@@ -89,9 +89,9 @@ RUN pnpm install --frozen-lockfile \
 FROM ghcr.io/agent-infra/sandbox:1.11.0
 
 # The published sandbox image runs as a non-root user; the dsh install step
-# needs root for apt-get, corepack, and writing into /app. Switch back to the
-# sandbox user at the end if the image documents one; otherwise root is
-# acceptable for this self-contained deployment.
+# needs root for apt-get, corepack, and writing into /app. The final image
+# defaults to the app user uid 6001 / gid 6000 (see the sudo re-elevation
+# decision in the risks table); the install runs as root before that.
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/* \
@@ -318,14 +318,14 @@ The new `scripts/entrypoint-sandbox.sh` supersedes it. The old file is removed i
 | Risk | Resolution (smoke-tested 2026-10-09) |
 |---|---|
 | Sandbox image's ENTRYPOINT doesn't honor `PUBLIC_PORT` env var | **Resolved:** run.sh honors it — "The sandbox is listening on 0.0.0.0:8090" |
-| Sandbox image runs as a non-root user, and the dsh install step needs root | **Resolved:** image config sets no `User`; install ran as root, run.sh handles its own gem-user switching |
+| Sandbox image runs as a non-root user, and the dsh install step needs root | **Resolved:** install runs as root in stage 2; the final image defaults to `USER 6001:6000` (app user) |
 | `mcp-resources` and `web-fetch-http` bundle names don't match my guesses | **Resolved:** integration uses an `@deepseek-ai/dsh-mcp-client` insert row (shape per `docs/user/guide/mcp-memory.md`); `web-fetch-http` dropped (no host-allowlist config) |
 | `web-fetch-http` is currently disabled in the offline patch | **Resolved by dropping it** — the MCP row carries the sandbox integration |
 | MCP transport: dsh's row may expect stdio, not HTTP | **Resolved:** `mcp-client` supports `streamable-http`; the sandbox's `/mcp` answered a proper `initialize` POST with 200 ("Sandbox MCP Tools" 2.14.7) |
 | Two processes in one container (process supervision) | **Resolved:** entrypoint starts run.sh in the background, exec's dsh as PID 1; `docker stop` tears down both in 0.5 s |
 | Sandbox image's `WORKSPACE` and dsh's `DSH_HOME` differ | Kept separate by design: dsh persists under `/dsh-home`, sandbox under `/home/gem`; file access goes through the MCP/HTTP APIs |
 | Pre-existing `git rev-parse` build failure | **Resolved:** `DSH_CLIENT_VERSION` env in the builder skips the git path entirely; `.dockerignore` unchanged |
-| `docker run --user 6001:6000` (non-root container start) | **Vendor limitation, documented:** the sandbox's `gem_init.sh`/`gem.sh` run unguarded `mkdir /var/run/gem`, `useradd`, and `chown root:gem` during boot, so a non-root PID 1 aborts under `set -e` — stock `agent-infra/sandbox` fails the same way. Supported mode: start as root; after boot dsh is PID 1 as uid 6001 and every sandbox service runs as gem=6001/6000; root persists only in the vendor's supervisord (their trust model) |
+| `docker run --user 6001:6000` (non-root container start) | **Resolved (2026-10-10), sudo re-elevation:** the image pre-creates `gem` (uid 6001 / gid 6000) with a `NOPASSWD:SETENV` sudoers entry and defaults to `USER 6001:6000`; a non-root entrypoint runs `sudo -n -E USER=gem HOME=/home/gem /opt/gem/run.sh` so the vendor boot keeps its root-time setup while the services it spawns run as gem. dsh is PID 1 as uid 6001 in both start modes; root persists only in the vendor's supervisord/nginx master (their trust model, same as the deployment platform's own sandbox images). Both modes smoke-tested 2026-10-10: 8080→401, 8090→200, MCP `initialize` OK |
 | dsh workspace under the app user | **Resolved:** the entrypoint cds to `/home/gem` (shared with the sandbox) before exec and pins `TSX_TSCONFIG_PATH=/app/tsconfig.json` plus absolute tsx/CLI paths — the cwd moves every `process.cwd()`-derived workspace root at once without breaking the source-launch module resolution |
 
 ## Out of scope

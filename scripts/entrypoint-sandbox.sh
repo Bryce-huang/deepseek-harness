@@ -8,11 +8,12 @@
 # answers, pre-creates the dsh web profile on first boot, and exec's dsh so
 # signals reach it directly; a trap forwards SIGTERM/SIGINT to the sandbox.
 #
-# Everything runs as the deployment's app user, uid 6001 / gid 6000: the
-# sandbox's run.sh builds its internal user from USER_UID/USER_GID, and dsh
-# is dropped to the same ids (numeric setpriv, no passwd entry required)
-# when the container starts as root; a container started --user 6001:6000
-# exec's directly.
+# Everything runs as the deployment's app user, uid 6001 / gid 6000. A
+# root-started container drops dsh to those ids (numeric setpriv) and runs
+# the sandbox boot directly; a container started --user 6001:6000 exec's dsh
+# directly and re-elevates the sandbox boot through the image's passwordless
+# sudoers entry, since the boot's setup needs root. The services that boot
+# spawns run as the app user either way.
 #
 # First-boot profile contents:
 # - the offline-friendly optional bundles (same list the standalone image
@@ -35,8 +36,15 @@ SANDBOX_PUBLIC_PORT="${PUBLIC_PORT:-8090}"
 
 # ── start the sandbox stack in the background ────────────────────────────────
 # run.sh inherits this process's environment: PUBLIC_PORT=8090 from the
-# Dockerfile, plus any SANDBOX_*/WORKSPACE overrides the user passed.
-"$SANDBOX_ENTRYPOINT" &
+# Dockerfile, plus any SANDBOX_*/WORKSPACE overrides the user passed. A
+# non-root start goes through sudo (NOPASSWD:SETENV from the Dockerfile):
+# the boot's setup needs root, USER/HOME stay pinned to the app user
+# because sudo would otherwise retarget them at root.
+if [ "$(id -u)" = "0" ]; then
+  "$SANDBOX_ENTRYPOINT" &
+else
+  sudo -n -E USER=gem HOME=/home/gem "$SANDBOX_ENTRYPOINT" &
+fi
 SANDBOX_PID=$!
 
 # ── wait for the sandbox's HTTP API ─────────────────────────────────────────

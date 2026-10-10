@@ -508,3 +508,12 @@ Expected: the workflow completes successfully.
 - MCP: bare GET → 406 (protocol headers required); proper `initialize` POST → **200, serverInfo "Sandbox MCP Tools" 2.14.7**, tools/prompts/resources capabilities.
 - Teardown: `docker stop` completes in **0.49 s** — both processes exit with the container.
 - `DSH_SANDBOX_MCP_URL` default (`http://127.0.0.1:8090/mcp`) verified correct; no adjustment needed.
+
+## Smoke results (2026-10-10, non-root default start)
+
+The image now defaults to `USER 6001:6000` (app user) and supports both start modes via sudo re-elevation — the pattern the deployment platform's own sandbox images use, replacing the earlier "start as root only" limitation:
+
+- Default (`docker run`, entrypoint as 6001): the image's `gem ALL=(ALL) NOPASSWD:SETENV:ALL` sudoers entry lets the entrypoint run `sudo -n -E USER=gem HOME=/home/gem /opt/gem/run.sh`; the vendor boot keeps its root-time setup, spawns services as gem, and dsh execs directly — **PID 1 is dsh under uid 6001(gem)**.
+- Root (`docker run --user 0`): boot runs directly as root; dsh drops via setpriv — PID 1 is dsh under uid 6001 as before.
+- Both modes: 8080 → 401 (per-boot token auth), 8090 `/v1/sandbox` → 200, MCP `initialize` → 200; profile/MCP row written once on first boot.
+- Root persists only in the vendor's supervisord and nginx master under either mode (the vendor's own trust model — its boot writes the same NOPASSWD sudoers grant for gem when started as root).

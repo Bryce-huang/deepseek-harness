@@ -521,3 +521,26 @@ The image now defaults to `USER 6001:6000` (app user) and supports both start mo
 ## Pivot (2026-10-12): Debian base, single amd64 image, CI-side verification
 
 The sandbox-based all-in-one image is retired (`scripts/entrypoint-sandbox.sh` deleted; workflow matrix removed). The published image is now `debian:bookworm-slim` + a common dev toolchain (git, python3, latest Go, latest LTS JDK via Adoptium, Node.js 24 LTS via NodeSource), single service on 8080, app user 6001/6000 with no elevation anywhere. Builds and smoke verification (sign-in flow, toolchain versions) run exclusively in GitHub Actions on linux/amd64.
+
+## Provider-catalog verification (2026-10-12, post 179b4cca61)
+
+The reported "加载供应商目录失败" (provider directory load failure) does not
+reproduce on the published Debian image. Playwright probes against
+`brycehuang/deepseek-harness:latest` (built from 179b4cca61), with and without
+`DSH_WEB_PASSWORD`, show every Models-page RPC succeeding:
+
+- `POST /api/llm/listProviders` → 200 (`[]` on a fresh container: no providers
+  declared yet — expected)
+- `POST /api/llm/listConfigurableProviders` → 200 (full catalog:
+  amazon-bedrock, ant-ling, anthropic, …)
+- `POST /api/settings/describe` → 200 (writable, namespaces present)
+- "Add model provider" opens the catalog card; deepseek/openai rows render and
+  `llm/discoverModels` returns model lists.
+
+The empty provider list on a fresh container is the designed first-run posture:
+rows render only for `configured` providers; the catalog is reachable through
+the Add button. The failure the user saw was on the dropped all-in-one
+(agent-infra) image, whose profile composition broke the llm listing; it
+disappears with that image. CI for 179b4cca61 is green (Build and Push +
+smoke); the E2E workflow's red run is the upstream no-key preflight guard
+(`DEEPSEek_API_KEY_EXTERNAL` unset on the fork), not a regression.

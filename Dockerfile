@@ -49,7 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js LTS (24.x) from NodeSource; corepack provides pnpm for the dsh
-# profile's package operations.
+# profile's package operations. COREPACK_HOME puts the prepared pnpm where
+# the app user can read it (the default cache lands under /root).
+ENV COREPACK_HOME=/usr/local/share/corepack
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \

@@ -103,7 +103,7 @@ const PAGE_STYLES = `
 
 /**
  * Render the sign-in page for browser navigations.
- * @param invalidToken - true when a submitted token failed verification, adding the retry notice.
+ * @param options - rendering options; `invalidToken: true` adds the retry notice after a failed exchange.
  * @returns complete standalone HTML document.
  */
 export function renderLoginPage(options: { invalidToken?: boolean } = {}): string {

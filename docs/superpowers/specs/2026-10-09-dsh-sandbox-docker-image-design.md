@@ -1,9 +1,6 @@
 # dsh Docker Image with `ghcr.io/agent-infra/sandbox` as the Runtime Base
 
-**Date:** 2026-10-09
-**Status:** Approved (design); implementation pending
-**Owner:** brycehuang
-**Replaces:** the prior `node:22-slim` production stage in `Dockerfile` (and the existing `scripts/entrypoint-web.sh`)
+**Date:** 2026-10-09 **Status:** Approved (design); implementation pending **Owner:** brycehuang **Replaces:** the prior `node:22-slim` production stage in `Dockerfile` (and the existing `scripts/entrypoint-web.sh`)
 
 ## Context
 

@@ -55,12 +55,10 @@ Changes: drop `git` from apt-get (only needed for rev-parse, now bypassed); add 
 
 - [x] **Step 2: Verify the build context has no .git and the env path is taken**
 
-Run: `grep -c git Dockerfile`
-Expected: `0` (no git references left in the builder install)
+Run: `grep -c git Dockerfile` Expected: `0` (no git references left in the builder install)
 
-Run: `sed -n '26,28p' apps/desktop/tsdown.config.ts`
-Expected output confirms the guard:
-```ts
+Run: `sed -n '26,28p' apps/desktop/tsdown.config.ts` Expected output confirms the guard:
+```ts ignore-check
 const clientEnvironment = resolveClientBuildEnvironment(process.env.DSH_CLIENT_VERSION === undefined
   ? repositoryClientBuildEnvironment(REPOSITORY_ROOT, process.env)
   : process.env)
@@ -143,8 +141,7 @@ Notes baked into this stage:
 
 - [x] **Step 2: Syntax-sanity check**
 
-Run: `docker build --check .` (BuildKit lint; if the local Docker lacks `--check`, skip with a note)
-Expected: no errors (warnings about legacy syntax acceptable)
+Run: `docker build --check .` (BuildKit lint; if the local Docker lacks `--check`, skip with a note) Expected: no errors (warnings about legacy syntax acceptable)
 
 - [x] **Step 3: Commit**
 
@@ -310,11 +307,9 @@ exec node --import tsx/esm apps/cli/src/bin.ts "$@"
 
 - [x] **Step 2: Make it executable and syntax-check**
 
-Run: `chmod +x scripts/entrypoint-sandbox.sh && sh -n scripts/entrypoint-sandbox.sh`
-Expected: no output (clean syntax)
+Run: `chmod +x scripts/entrypoint-sandbox.sh && sh -n scripts/entrypoint-sandbox.sh` Expected: no output (clean syntax)
 
-Run: `command -v shellcheck >/dev/null && shellcheck scripts/entrypoint-sandbox.sh || echo "shellcheck unavailable"`
-Expected: no findings, or "shellcheck unavailable"
+Run: `command -v shellcheck >/dev/null && shellcheck scripts/entrypoint-sandbox.sh || echo "shellcheck unavailable"` Expected: no findings, or "shellcheck unavailable"
 
 - [x] **Step 3: Commit**
 
@@ -332,8 +327,7 @@ git commit -m "feat(docker): sandbox-supervising entrypoint with MCP profile wir
 
 - [x] **Step 1: Confirm nothing else references it**
 
-Run: `grep -rn "entrypoint-web" --include="*" . 2>/dev/null | grep -v node_modules | grep -v ".git/"`
-Expected: only `Dockerfile` (already updated in Task 2 to copy `entrypoint-sandbox.sh`) — no other references.
+Run: `grep -rn "entrypoint-web" --include="*" . 2>/dev/null | grep -v node_modules | grep -v ".git/"` Expected: only `Dockerfile` (already updated in Task 2 to copy `entrypoint-sandbox.sh`) — no other references.
 
 - [x] **Step 2: Delete and commit**
 
@@ -387,8 +381,7 @@ to:
 
 - [x] **Step 2: Validate the workflow YAML**
 
-Run: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/docker-build.yml'))" && echo OK`
-Expected: `OK`
+Run: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/docker-build.yml'))" && echo OK` Expected: `OK`
 
 - [x] **Step 3: Commit**
 
@@ -405,8 +398,7 @@ git commit -m "ci(docker): embed the build commit in client build metadata"
 
 - [x] **Step 1: Build the image**
 
-Run: `docker build -t dsh-sandbox:dev .`
-Expected: both stages succeed; the builder completes `pnpm run build:lib:host` without any `git rev-parse` error.
+Run: `docker build -t dsh-sandbox:dev .` Expected: both stages succeed; the builder completes `pnpm run build:lib:host` without any `git rev-parse` error.
 
 If the build fails at `corepack prepare` in the production stage (sandbox image's Node not shipping corepack), fall back to:
 ```dockerfile
@@ -426,24 +418,19 @@ Expected: container starts; `docker logs dsh-sandbox-smoke` shows `dsh-entrypoin
 
 - [x] **Step 3: Probe both services**
 
-Run: `curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8080/`
-Expected: `200` (or `401` when `DSH_WEB_PASSWORD` is set — re-test with `-e DSH_WEB_PASSWORD=x` and `curl -u :x` if so)
+Run: `curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8080/` Expected: `200` (or `401` when `DSH_WEB_PASSWORD` is set — re-test with `-e DSH_WEB_PASSWORD=x` and `curl -u :x` if so)
 
-Run: `curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8090/v1/sandbox`
-Expected: `200`
+Run: `curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8090/v1/sandbox` Expected: `200`
 
 - [x] **Step 4: Verify the MCP endpoint and profile patch**
 
-Run: `docker exec dsh-sandbox-smoke cat /dsh-home/profiles/web/cordis.patch.yml`
-Expected: the `mcp-sandbox` insert row with `url: 'http://127.0.0.1:8090/mcp'`.
+Run: `docker exec dsh-sandbox-smoke cat /dsh-home/profiles/web/cordis.patch.yml` Expected: the `mcp-sandbox` insert row with `url: 'http://127.0.0.1:8090/mcp'`.
 
-Run: `docker exec dsh-sandbox-smoke node -e "fetch('http://127.0.0.1:8090/mcp').then(r=>console.log('status',r.status)).catch(e=>console.log('err',e.message))"`
-Expected: an HTTP status (any code — the endpoint answers; a streamable-HTTP MCP server typically 40x's a bare GET). If it errors with connection refused, inspect the sandbox's routing (`docker exec dsh-sandbox-smoke sh -c 'command -v ss >/dev/null && ss -ltnp || netstat -ltnp'`) and record the finding.
+Run: `docker exec dsh-sandbox-smoke node -e "fetch('http://127.0.0.1:8090/mcp').then(r=>console.log('status',r.status)).catch(e=>console.log('err',e.message))"` Expected: an HTTP status (any code — the endpoint answers; a streamable-HTTP MCP server typically 40x's a bare GET). If it errors with connection refused, inspect the sandbox's routing (`docker exec dsh-sandbox-smoke sh -c 'command -v ss >/dev/null && ss -ltnp || netstat -ltnp'`) and record the finding.
 
 - [x] **Step 5: Verify teardown**
 
-Run: `docker stop -t 15 dsh-sandbox-smoke && docker rm dsh-sandbox-smoke`
-Expected: stops within the grace period (exit 0, no timeout kill message).
+Run: `docker stop -t 15 dsh-sandbox-smoke && docker rm dsh-sandbox-smoke` Expected: stops within the grace period (exit 0, no timeout kill message).
 
 - [x] **Step 6: Record smoke results**
 
@@ -480,8 +467,7 @@ Pushing master triggers `.github/workflows/docker-build.yml`, which builds and p
 
 - [x] **Step 3: Confirm the CI image published**
 
-Run: `gh run watch $(gh run list --workflow=docker-build.yml --limit 1 --json databaseId --jq '.[0].databaseId') --exit-status`
-Expected: the workflow completes successfully.
+Run: `gh run watch $(gh run list --workflow=docker-build.yml --limit 1 --json databaseId --jq '.[0].databaseId') --exit-status` Expected: the workflow completes successfully.
 
 ---
 
@@ -522,25 +508,13 @@ The image now defaults to `USER 6001:6000` (app user) and supports both start mo
 
 The sandbox-based all-in-one image is retired (`scripts/entrypoint-sandbox.sh` deleted; workflow matrix removed). The published image is now `debian:bookworm-slim` + a common dev toolchain (git, python3, latest Go, latest LTS JDK via Adoptium, Node.js 24 LTS via NodeSource), single service on 8080, app user 6001/6000 with no elevation anywhere. Builds and smoke verification (sign-in flow, toolchain versions) run exclusively in GitHub Actions on linux/amd64.
 
-## Provider-catalog verification (2026-10-12, post 179b4cca61)
+## Provider-catalog verification (2026-10-12, latest published Debian image)
 
-The reported "加载供应商目录失败" (provider directory load failure) does not
-reproduce on the published Debian image. Playwright probes against
-`brycehuang/deepseek-harness:latest` (built from 179b4cca61), with and without
-`DSH_WEB_PASSWORD`, show every Models-page RPC succeeding:
+The reported "加载供应商目录失败" (provider directory load failure) does not reproduce on the published Debian image. Playwright probes against `brycehuang/deepseek-harness:latest` (the COREPACK_HOME fix build), with and without `DSH_WEB_PASSWORD`, show every Models-page RPC succeeding:
 
-- `POST /api/llm/listProviders` → 200 (`[]` on a fresh container: no providers
-  declared yet — expected)
-- `POST /api/llm/listConfigurableProviders` → 200 (full catalog:
-  amazon-bedrock, ant-ling, anthropic, …)
+- `POST /api/llm/listProviders` → 200 (`[]` on a fresh container: no providers declared yet — expected)
+- `POST /api/llm/listConfigurableProviders` → 200 (full catalog: amazon-bedrock, ant-ling, anthropic, …)
 - `POST /api/settings/describe` → 200 (writable, namespaces present)
-- "Add model provider" opens the catalog card; deepseek/openai rows render and
-  `llm/discoverModels` returns model lists.
+- "Add model provider" opens the catalog card; deepseek/openai rows render and `llm/discoverModels` returns model lists.
 
-The empty provider list on a fresh container is the designed first-run posture:
-rows render only for `configured` providers; the catalog is reachable through
-the Add button. The failure the user saw was on the dropped all-in-one
-(agent-infra) image, whose profile composition broke the llm listing; it
-disappears with that image. CI for 179b4cca61 is green (Build and Push +
-smoke); the E2E workflow's red run is the upstream no-key preflight guard
-(`DEEPSEek_API_KEY_EXTERNAL` unset on the fork), not a regression.
+The empty provider list on a fresh container is the designed first-run posture: rows render only for `configured` providers; the catalog is reachable through the Add button. The failure the user saw was on the dropped all-in-one (agent-infra) image, whose profile composition broke the llm listing; it disappears with that image. CI for that build is green (Build and Push + smoke); the E2E workflow's red run is the upstream no-key preflight guard (`DEEPSEek_API_KEY_EXTERNAL` unset on the fork), not a regression.

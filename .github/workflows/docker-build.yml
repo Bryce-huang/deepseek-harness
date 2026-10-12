@@ -18,7 +18,6 @@ jobs:
       packages: write
     outputs:
       tag: ${{ steps.version.outputs.tag }}
-      image: ${{ steps.version.outputs.image }}
 
     steps:
       - name: Checkout
@@ -34,7 +33,6 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE="$(date -u +%Y%m%d-%H%M%S)"
           echo "tag=${DATE}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "image=${REGISTRY}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "Unique build tag: ${DATE}-${SHORT_SHA}"
 
       - name: Login to Docker Hub
@@ -65,12 +63,12 @@ jobs:
     needs: build-and-push
     steps:
       - name: Pull the published image
-        run: docker pull ${{ needs.build-and-push.outputs.image }}:${{ needs.build-and-push.outputs.tag }}
+        run: docker pull "${REGISTRY}/${IMAGE_NAME}:${{ needs.build-and-push.outputs.tag }}"
 
       - name: Start container
         run: |
           docker run -d --name dsh-smoke -p 8080:8080 \
-            ${{ needs.build-and-push.outputs.image }}:${{ needs.build-and-push.outputs.tag }}
+            "${REGISTRY}/${IMAGE_NAME}:${{ needs.build-and-push.outputs.tag }}"
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
             [ "$code" != "000" ] && break

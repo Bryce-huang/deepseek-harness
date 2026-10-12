@@ -13,6 +13,7 @@
     "src/client/rpc.ts",
     "src/http-bridge.ts",
     "src/index.ts",
+    "src/login-page.ts",
     "src/loopback-hostname.ts",
     "src/operator-peer.ts",
     "src/recovery-config.ts",

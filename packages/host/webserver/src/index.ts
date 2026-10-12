@@ -6,7 +6,6 @@
  * Route handlers retain direct response ownership.
  */
 
-import { timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse, Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -68,13 +67,6 @@ export interface Config {
   compressionLevel?: number
   /** Minimum known response length eligible for gzip; unknown-length streams are eligible. @default 1024 */
   compressionThresholdBytes?: number
-  /**
-   * HTTP Basic Auth password. When non-empty, every request (including
-   * WebSocket upgrades) must carry valid Basic Auth credentials (any
-   * username, this password). When empty, no Basic Auth is applied.
-   * @default ''
-   */
-  basicAuthPassword?: string
 }
 
 const DEFAULT_COMPRESSION = 'none' as const
@@ -85,7 +77,6 @@ interface ResolvedConfig extends Config {
   compression: 'none' | 'gzip'
   compressionLevel: number
   compressionThresholdBytes: number
-  basicAuthPassword: string
 }
 
 type NodeMiddleware = (
@@ -93,48 +84,6 @@ type NodeMiddleware = (
   res: ServerResponse,
   next: () => void,
 ) => void
-
-const BASIC_AUTH_CHALLENGE = 'Basic realm="dsh"'
-
-/**
- * Create a Basic Auth middleware that requires valid credentials before
- * proceeding. Any username is accepted; only the password is checked.
- * Comparison is timing-safe to prevent timing side channels.
- */
-function createBasicAuthMiddleware(password: string): NodeMiddleware {
-  const expectedPasswordBytes = Buffer.from(password, 'utf8')
-  return (req, res, next) => {
-    const authorization = req.headers.authorization
-    if (authorization === undefined || !authorization.startsWith('Basic ')) {
-      res.writeHead(401, { 'www-authenticate': BASIC_AUTH_CHALLENGE })
-      res.end()
-      return
-    }
-    let decoded: string
-    try {
-      decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8')
-    } catch {
-      res.writeHead(401, { 'www-authenticate': BASIC_AUTH_CHALLENGE })
-      res.end()
-      return
-    }
-    const colonIndex = decoded.indexOf(':')
-    if (colonIndex === -1) {
-      res.writeHead(401, { 'www-authenticate': BASIC_AUTH_CHALLENGE })
-      res.end()
-      return
-    }
-    const providedPassword = decoded.slice(colonIndex + 1)
-    const providedBytes = Buffer.from(providedPassword, 'utf8')
-    if (providedBytes.byteLength !== expectedPasswordBytes.byteLength
-      || !timingSafeEqual(providedBytes, expectedPasswordBytes)) {
-      res.writeHead(401, { 'www-authenticate': BASIC_AUTH_CHALLENGE })
-      res.end()
-      return
-    }
-    next()
-  }
-}
 
 function createGzipMiddleware(config: ResolvedConfig): NodeMiddleware {
   // `compression` is typed for Express, but its runtime uses only the
@@ -180,12 +129,6 @@ export class WebServer extends Service {
     compression: z.union([z.const('none'), z.const('gzip')]).default(DEFAULT_COMPRESSION),
     compressionLevel: z.number().step(1).min(0).max(9).default(DEFAULT_COMPRESSION_LEVEL),
     compressionThresholdBytes: z.natural().default(DEFAULT_COMPRESSION_THRESHOLD_BYTES),
-    // When set to a non-empty string, gates every HTTP and WebSocket
-    // request with HTTP Basic Auth (the password is the entire user-info
-    // portion; the user name is ignored). An empty string disables
-    // the gate so deployments that do not need it can leave the
-    // config empty without having to remove the row.
-    basicAuthPassword: z.string().default(''),
   })
 
   private readonly exact = new Map<string, WebRoute>()
@@ -197,18 +140,11 @@ export class WebServer extends Service {
   private server!: Server
   private listenedPort!: number
   private readonly gzip: NodeMiddleware | undefined
-  private readonly basicAuth: { middleware: NodeMiddleware, expectedPasswordBytes: Buffer } | undefined
 
   constructor(ctx: Context, private config: Config) {
     super(ctx, 'webServer')
     const resolved = config as ResolvedConfig
     this.gzip = resolved.compression === 'gzip' ? createGzipMiddleware(resolved) : undefined
-    this.basicAuth = resolved.basicAuthPassword
-      ? {
-        middleware: createBasicAuthMiddleware(resolved.basicAuthPassword),
-        expectedPasswordBytes: Buffer.from(resolved.basicAuthPassword, 'utf8'),
-      }
-      : undefined
   }
 
   /** The listening port (the OS-assigned value when config.port is 0). */
@@ -316,42 +252,10 @@ export class WebServer extends Service {
           res.end()
         })
       }
-      const afterAuth = (): void => {
-        if (this.gzip === undefined) next()
-        else this.gzip(req, res, next)
-      }
-      if (this.basicAuth === undefined) afterAuth()
-      else this.basicAuth.middleware(req, res, afterAuth)
+      if (this.gzip === undefined) next()
+      else this.gzip(req, res, next)
     })
     this.server.on('upgrade', (req, socket, head) => {
-      // Basic Auth gate for WebSocket upgrades
-      if (this.basicAuth !== undefined) {
-        const authorization = req.headers.authorization
-        if (authorization === undefined || !authorization.startsWith('Basic ')) {
-          socket.destroy()
-          return
-        }
-        let decoded: string
-        try {
-          decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8')
-        } catch {
-          socket.destroy()
-          return
-        }
-        const colonIndex = decoded.indexOf(':')
-        if (colonIndex === -1) {
-          socket.destroy()
-          return
-        }
-        const providedPassword = decoded.slice(colonIndex + 1)
-        const providedBytes = Buffer.from(providedPassword, 'utf8')
-        const expectedBytes = this.basicAuth.expectedPasswordBytes
-        if (providedBytes.byteLength !== expectedBytes.byteLength
-          || !timingSafeEqual(providedBytes, expectedBytes)) {
-          socket.destroy()
-          return
-        }
-      }
       const onError = (error: Error): void => {
         this.ctx.logger.warn(error)
         socket.destroy()

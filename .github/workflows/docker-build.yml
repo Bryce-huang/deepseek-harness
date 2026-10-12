@@ -81,6 +81,8 @@ jobs:
           # Browser navigation gets the HTML sign-in page on 401.
           curl -s -H 'Accept: text/html' http://localhost:8080/ | grep -q 'name="token"' \
             || { echo 'sign-in page missing token form'; exit 1; }
+          # The sign-in page is the only gate: no Basic-Auth challenge header.
+          ! curl -s -D - -o /dev/null -H 'Accept: text/html' http://localhost:8080/ | grep -qi 'www-authenticate'
           # API clients keep the machine-readable body.
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 401 ]
           # Launch-token exchange mints the cookie; the cookie then authorizes.

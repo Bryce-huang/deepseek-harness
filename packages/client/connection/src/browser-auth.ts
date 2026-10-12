@@ -3,6 +3,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import type { CredentialProvider, CredentialRecord } from '@deepseek-ai/dsh-credentials'
+import { renderLoginPage } from './login-page.ts'
 import type {
   ConnectionIndexRequest,
   ConnectionIndexResponse,
@@ -64,6 +65,11 @@ function header(
   if (headers instanceof Headers) return headers.get(name) ?? undefined
   const value = headers[name]
   return typeof value === 'string' ? value : undefined
+}
+
+/** Distinguish browser navigations (GET with an HTML Accept header) from API clients. */
+function browserNavigation(req: ConnectionIndexRequest): boolean {
+  return req.method === 'GET' && /text\/html/u.test(header(req.headers, 'accept') ?? '')
 }
 
 /** Canonical request authority used as the cookie name and signed audience. */
@@ -229,7 +235,9 @@ export class BrowserAuth {
   /**
    * Authenticate an index request. A valid root query token mints the cookie
    * and redirects to the directory-relative clean `./`; a valid cookie lets
-   * the caller serve the index; every other request receives the same minimal
+   * the caller serve the index; browser navigations (GET with an HTML Accept
+   * header) receive the sign-in page — with the invalid-token notice when a
+   * pasted token failed — and every other request receives the same minimal
    * 401 response.
    * @param req - incoming root or configured-index request.
    * @param res - response owned when this method returns false.
@@ -271,11 +279,11 @@ export class BrowserAuth {
         res.end()
         return false
       }
-      this.writeUnauthorized(req, res)
+      this.writeUnauthorized(req, res, browserNavigation(req))
       return false
     }
     if (this.isAuthenticated(req)) return true
-    this.writeUnauthorized(req, res)
+    this.writeUnauthorized(req, res, browserNavigation(req))
     return false
   }
 
@@ -299,13 +307,19 @@ export class BrowserAuth {
       && payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
   }
 
-  private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {
+  private writeUnauthorized(
+    req: ConnectionIndexRequest,
+    res: ConnectionIndexResponse,
+    html: boolean,
+  ): void {
     res.writeHead(401, {
       'cache-control': 'no-store',
-      'content-type': 'text/plain; charset=utf-8',
+      'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8',
     })
     res.end(req.method === 'HEAD'
       ? undefined
-      : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
+      : html
+        ? renderLoginPage({ invalidToken: new URL(req.url ?? '/', 'http://dsh.invalid').searchParams.has(TOKEN_QUERY) })
+        : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
   }
 }

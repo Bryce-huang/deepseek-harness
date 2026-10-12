@@ -62,6 +62,7 @@ function createAuth(
 function request(url: string, authority = '127.0.0.1:3080', init?: {
   cookie?: string
   method?: string
+  accept?: string
 }): ConnectionIndexRequest {
   return {
     method: init?.method ?? 'GET',
@@ -69,6 +70,7 @@ function request(url: string, authority = '127.0.0.1:3080', init?: {
     headers: {
       host: authority,
       ...init?.cookie === undefined ? {} : { cookie: init.cookie },
+      ...init?.accept === undefined ? {} : { accept: init.accept },
     },
   }
 }
@@ -188,6 +190,37 @@ describe('BrowserAuth', () => {
         ? undefined
         : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
     }
+  })
+
+  it('serves the sign-in page to browser navigations, with the notice after a wrong token', async () => {
+    const store = new RecordCredentials()
+    const auth = await createAuth(store)
+
+    const landing = response()
+    expect(auth.authorizeIndex(request('/', '127.0.0.1:3080', { accept: 'text/html,application/xhtml+xml' }), landing.value)).toBe(false)
+    expect(landing.state.status).toBe(401)
+    expect(landing.state.headers).toEqual({
+      'cache-control': 'no-store',
+      'content-type': 'text/html; charset=utf-8',
+    })
+    expect(landing.state.body).toContain('name="token"')
+    expect(landing.state.body).not.toContain('Invalid token')
+
+    const rejected = response()
+    expect(auth.authorizeIndex(request('/?token=wrong', '127.0.0.1:3080', { accept: 'text/html,application/xhtml+xml' }), rejected.value)).toBe(false)
+    expect(rejected.state.status).toBe(401)
+    expect(rejected.state.headers).toEqual({
+      'cache-control': 'no-store',
+      'content-type': 'text/html; charset=utf-8',
+    })
+    expect(rejected.state.body).toContain('Invalid token')
+
+    const apiClient = response()
+    expect(auth.authorizeIndex(request('/?token=wrong'), apiClient.value)).toBe(false)
+    expect(apiClient.state.headers).toEqual({
+      'cache-control': 'no-store',
+      'content-type': 'text/plain; charset=utf-8',
+    })
   })
 
   it('rejects tampering, expiry, future issuance, and a longer lifetime than configured', async () => {

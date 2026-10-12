@@ -517,3 +517,7 @@ The image now defaults to `USER 6001:6000` (app user) and supports both start mo
 - Root (`docker run --user 0`): boot runs directly as root; dsh drops via setpriv — PID 1 is dsh under uid 6001 as before.
 - Both modes: 8080 → 401 (per-boot token auth), 8090 `/v1/sandbox` → 200, MCP `initialize` → 200; profile/MCP row written once on first boot.
 - Root persists only in the vendor's supervisord and nginx master under either mode (the vendor's own trust model — its boot writes the same NOPASSWD sudoers grant for gem when started as root).
+
+## Pivot (2026-10-12): Debian base, single amd64 image, CI-side verification
+
+The sandbox-based all-in-one image is retired (`scripts/entrypoint-sandbox.sh` deleted; workflow matrix removed). The published image is now `debian:bookworm-slim` + a common dev toolchain (git, python3, latest Go, latest LTS JDK via Adoptium, Node.js 24 LTS via NodeSource), single service on 8080, app user 6001/6000 with no elevation anywhere. Builds and smoke verification (sign-in flow, toolchain versions) run exclusively in GitHub Actions on linux/amd64.

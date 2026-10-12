@@ -1,8 +1,3 @@
-# Runtime base selection: the pinned sandbox release by default; CI also
-# builds the tracking variant with
-# --build-arg SANDBOX_IMAGE=ghcr.io/agent-infra/sandbox:latest.
-ARG SANDBOX_IMAGE=ghcr.io/agent-infra/sandbox:1.11.0
-
 # ---- Stage 1: Build ----
 FROM node:22-slim AS builder
 
@@ -37,22 +32,53 @@ RUN npm_config_fetch_timeout=600000 npm_config_fetch_retries=5 \
     && pnpm run build:lib:client \
     && pnpm run build:web
 
-# ---- Stage 2: Production on the agent-infra sandbox ----
-# The published sandbox image (ENTRYPOINT /opt/gem/run.sh, default PUBLIC_PORT
-# 8080) carries the browser, VNC, code-server, jupyter, shell/file MCP stack.
-# dsh becomes the container's main service on 8080; the sandbox's public
-# listener moves to 8090. Its MCP endpoint is then
-# http://127.0.0.1:8090/mcp (streamable-HTTP), reached by the profile patch
-# the entrypoint writes on first boot.
-FROM ${SANDBOX_IMAGE}
+# ---- Stage 2: Production on a standard Debian with a common dev toolchain ----
+# Plain debian:bookworm-slim plus the toolchain an agent needs at runtime —
+# git, python, the latest Go, the latest LTS JDK, Node.js LTS. No browser/VNC
+# stack: dsh is the single service on 8080.
+FROM debian:bookworm-slim
 
-# Root for the install steps below: corepack needs a writable install root,
-# and /app must be creatable. The sandbox's own run.sh handles its user
-# switching internally.
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+ARG TARGETARCH
+
+# Base packages: git/python from the distro, plus common CLI helpers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl xz-utils git \
+      python3 python3-pip python3-venv \
+      build-essential openssh-client ripgrep jq unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js LTS (24.x) from NodeSource; corepack provides pnpm for the dsh
+# profile's package operations.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable && corepack prepare pnpm@11.7.0 --activate
+
+# Latest stable Go from the official distribution (resolved at build time).
+RUN GO_VERSION="$(curl -fsSL 'https://go.dev/dl/?mode=json' \
+      | grep -o '"version": "go[0-9]*\.[0-9]*\(\.[0-9]*\)\?"' | head -1 | cut -d'"' -f4 | sed 's/^go//')" \
+    && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
+      | tar -C /usr/local -xz
+
+# Latest LTS JDK (Temurin 25) from the Adoptium API; the symlink absorbs the
+# full version in the extracted directory name.
+RUN case "${TARGETARCH}" in \
+      amd64) JDK_ARCH=x64 ;; \
+      arm64) JDK_ARCH=aarch64 ;; \
+      *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://api.adoptium.net/v3/binary/latest/25/ga/linux/${JDK_ARCH}/jdk/hotspot/normal/eclipse" \
+      | tar -C /opt -xz \
+    && ln -s /opt/jdk-* /opt/jdk
+
+ENV PATH=/opt/jdk/bin:/usr/local/go/bin:${PATH} \
+    JAVA_HOME=/opt/jdk
+
+# The deployment's app user (uid 6001 / gid 6000), the image's only runtime
+# identity — no elevation anywhere: dsh needs no root-time setup.
+RUN groupadd --gid 6000 apps \
+    && useradd --uid 6001 --gid apps --shell /bin/bash --create-home --no-log-init app
 
 WORKDIR /app
 
@@ -61,56 +87,25 @@ WORKDIR /app
 # and pnpm workspace resolution requires the full structure.
 COPY --from=builder /app /app
 
-# Offline-first entrypoint: starts the sandbox, waits for its API, pre-creates
-# the web profile (offline optional bundles plus the sandbox MCP row), and
-# exec's the dsh web command. See scripts/entrypoint-sandbox.sh.
-COPY scripts/entrypoint-sandbox.sh /usr/local/bin/dsh-entrypoint
+# Offline-first entrypoint: pre-creates the web profile (offline optional
+# bundles) and exec's the dsh web command. See scripts/entrypoint-web.sh.
+COPY scripts/entrypoint-web.sh /usr/local/bin/dsh-entrypoint
 RUN chmod +x /usr/local/bin/dsh-entrypoint
 
-# dsh owns 8080; the sandbox's public listener moves to 8090. The remaining
-# sandbox ports keep their image defaults (MCP hub 8079, gem 8088, code-server
-# 8200, VNC 5900).
-#
-# USER_UID/USER_GID retarget the sandbox's internal user creation from the
-# image default (1000/1000) to the deployment's app user: run.sh creates its
-# user from these envs and chowns /home/gem, so every sandbox service runs
-# uid 6001 / gid 6000, and the entrypoint drops dsh to the same ids.
-ENV PUBLIC_PORT=8090 \
-    USER_UID=6001 \
-    USER_GID=6000 \
-    DSH_ALLOW_ALL_INTERFACES=1 \
+ENV DSH_ALLOW_ALL_INTERFACES=1 \
     DSH_TELEMETRY_DISABLED=1 \
     DSH_HOME=/dsh-home \
-    NODE_ENV=production \
-    DSH_SANDBOX_MCP_URL=http://127.0.0.1:8090/mcp
+    NODE_ENV=production
 
 # dsh's persistent state (profiles, sessions) lives here, owned by the app
 # user; numeric ids need no passwd entry at build time.
 RUN mkdir -p /dsh-home && chown 6001:6000 /dsh-home
 
-# Non-root start support (docker run --user 6001:6000): pre-create the app
-# user so uid 6001 resolves to a name (sudoers matches by name; docker sets
-# HOME from the passwd entry) and grant it passwordless sudo. A non-root
-# start re-elevates the sandbox boot through that entry (the boot needs
-# root: user creation, pidfiles, nginx); the services it spawns still run as
-# the app user via their program-level user= directives. A root start never
-# uses this entry — the vendor boot writes the same grant itself.
-RUN groupadd --gid 6000 gem \
-    && useradd --uid 6001 --gid 6000 --shell /bin/bash --create-home --no-log-init gem \
-    && printf 'gem ALL=(ALL) NOPASSWD:SETENV:ALL\n' > /etc/sudoers.d/gem \
-    && chmod 440 /etc/sudoers.d/gem
-
-# The app user (uid 6001 / gid 6000) is the image's default runtime
-# identity; the entrypoint re-elevates the sandbox boot via sudo from it.
-# `docker run --user 0` keeps the root path (direct boot, setpriv drop for
-# dsh).
 USER 6001:6000
 
-EXPOSE 8080 8090
+EXPOSE 8080
 
-# dsh binds 8080 only after the sandbox stack is up, so the start period
-# covers the sandbox boot too (its own WAIT_PORTS gate plus service starts).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD node -e "fetch('http://localhost:8080/').catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]

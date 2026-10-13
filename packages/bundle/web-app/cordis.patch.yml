@@ -230,10 +230,14 @@
       name: '@deepseek-ai/dsh-client-connection'
       inject: [webRuntime]
       config:
-        # LAN literals derived from the active bind plus --trusted-host extras.
-        # A deployment adding authorities keeps this expression and concatenates
-        # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
-        trustedHosts: !!js ctx.webRuntime.trustedHosts
+        # LAN literals derived from the active bind plus --trusted-host extras,
+        # plus DSH_TRUSTED_HOSTS (space-separated) for deployments reached by
+        # a name the runtime cannot derive (proxied domains, host LAN IPs
+        # behind a container bridge). A malformed entry fails plugin load.
+        trustedHosts: !!js ctx.webRuntime.trustedHosts.concat((process.env.DSH_TRUSTED_HOSTS ?? '').split(/\s+/).filter(Boolean))
+        # A fixed sign-in token (DSH_WEB_TOKEN) accepted by the sign-in page
+        # alongside the per-boot launch token; unset keeps log-token-only sign-in.
+        webToken: !!js process.env.DSH_WEB_TOKEN || undefined
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.

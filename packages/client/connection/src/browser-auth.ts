@@ -190,14 +190,17 @@ async function initializeSecret(credentials: CredentialProvider): Promise<Buffer
  */
 export class BrowserAuth {
   private readonly launchToken: string
+  private readonly webToken: string | undefined
   private readonly maxAgeMilliseconds: number
 
   private constructor(
     processOwner: object,
     private readonly secret: Buffer,
     maxAgeDays: number,
+    webToken: string | undefined,
   ) {
     this.launchToken = processLaunchToken(processOwner)
+    this.webToken = webToken === '' ? undefined : webToken
     this.maxAgeMilliseconds = maxAgeDays * DAY_MILLISECONDS
     if (!Number.isSafeInteger(this.maxAgeMilliseconds)
       || !Number.isSafeInteger(Date.now() + this.maxAgeMilliseconds)) {
@@ -211,14 +214,16 @@ export class BrowserAuth {
    * @param processOwner - root application context retaining one token across Connection reloads.
    * @param credentials - persistent credential provider for the Web profile.
    * @param maxAgeDays - positive absolute browser-cookie lifetime in days.
+   * @param webToken - deployment-configured exchange token accepted in addition to the launch token; empty means unset.
    * @returns initialized authentication owner with the process owner's launch token.
    */
   static async create(
     processOwner: object,
     credentials: CredentialProvider,
     maxAgeDays: number,
+    webToken?: string,
   ): Promise<BrowserAuth> {
-    return new BrowserAuth(processOwner, await initializeSecret(credentials), maxAgeDays)
+    return new BrowserAuth(processOwner, await initializeSecret(credentials), maxAgeDays, webToken)
   }
 
   /**
@@ -250,7 +255,7 @@ export class BrowserAuth {
     if (tokens.length > 0) {
       const authority = requestAuthority(req.headers)
       if (req.method === 'GET' && url.pathname === '/' && tokens.length === 1
-        && authority !== undefined && tokenMatches(tokens.join(''), this.launchToken)) {
+        && authority !== undefined && this.tokenExchanges(tokens.join(''))) {
         const issuedAt = Date.now()
         const expiresAt = issuedAt + this.maxAgeMilliseconds
         const value = encodeCookie({
@@ -307,6 +312,12 @@ export class BrowserAuth {
       && payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
   }
 
+  /** Whether a submitted token is one this activation exchanges for a cookie. */
+  private tokenExchanges(candidate: string): boolean {
+    return tokenMatches(candidate, this.launchToken)
+      || (this.webToken !== undefined && tokenMatches(candidate, this.webToken))
+  }
+
   private writeUnauthorized(
     req: ConnectionIndexRequest,
     res: ConnectionIndexResponse,
@@ -319,7 +330,10 @@ export class BrowserAuth {
     res.end(req.method === 'HEAD'
       ? undefined
       : html
-        ? renderLoginPage({ invalidToken: new URL(req.url ?? '/', 'http://dsh.invalid').searchParams.has(TOKEN_QUERY) })
+        ? renderLoginPage({
+          invalidToken: new URL(req.url ?? '/', 'http://dsh.invalid').searchParams.has(TOKEN_QUERY),
+          staticToken: this.webToken !== undefined,
+        })
         : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
   }
 }

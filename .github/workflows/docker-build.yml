@@ -65,6 +65,8 @@ jobs:
       - name: Start container
         run: |
           docker run -d --name dsh-smoke -p 8080:8080 \
+            -e DSH_WEB_TOKEN=smoke-fixed-token \
+            -e "DSH_TRUSTED_HOSTS=dsh-smoke.example" \
             "${REGISTRY}/${IMAGE_NAME}:${{ needs.build-and-push.outputs.tag }}"
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
@@ -81,14 +83,22 @@ jobs:
             || { echo 'sign-in page missing token form'; exit 1; }
           # The sign-in page is the only gate: no Basic-Auth challenge header.
           ! curl -s -D - -o /dev/null -H 'Accept: text/html' http://localhost:8080/ | grep -qi 'www-authenticate'
+          # The page hints at the deployment-configured token (DSH_WEB_TOKEN).
+          curl -s -H 'Accept: text/html' http://localhost:8080/ | grep -q 'DSH_WEB_TOKEN'
           # API clients keep the machine-readable body.
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 401 ]
-          # Launch-token exchange mints the cookie; the cookie then authorizes.
+          # The configured token exchanges for a cookie, no log scraping needed.
+          [ "$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8080/?token=smoke-fixed-token')" = 303 ]
+          curl -s -c /tmp/dsh-cookies.txt -o /dev/null 'http://localhost:8080/?token=smoke-fixed-token'
+          [ "$(curl -s -b /tmp/dsh-cookies.txt -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 200 ]
+          # A declared DSH_TRUSTED_HOSTS authority passes the /api Host fence
+          # (401: past the fence, cookie not attached), an undeclared one 403s.
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: dsh-smoke.example' http://localhost:8080/api/ping)" = 401 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' http://localhost:8080/api/ping)" = 403 ]
+          # The per-boot launch token keeps working beside the configured one.
           TOKEN=$(docker logs dsh-smoke 2>&1 | grep -oE 'token=[A-Za-z0-9_-]+' | head -1 | cut -d= -f2)
           [ -n "$TOKEN" ] || { echo 'no launch token in logs'; exit 1; }
           [ "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/?token=$TOKEN")" = 303 ]
-          curl -s -c /tmp/dsh-cookies.txt -o /dev/null "http://localhost:8080/?token=$TOKEN"
-          [ "$(curl -s -b /tmp/dsh-cookies.txt -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 200 ]
           # The container runs as the app user 6001:6000.
           [ "$(docker exec dsh-smoke id -u)" = 6001 ]
           [ "$(docker exec dsh-smoke id -g)" = 6000 ]

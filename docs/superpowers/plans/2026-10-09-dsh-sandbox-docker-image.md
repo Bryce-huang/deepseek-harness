@@ -518,3 +518,7 @@ The reported "加载供应商目录失败" (provider directory load failure) doe
 - "Add model provider" opens the catalog card; deepseek/openai rows render and `llm/discoverModels` returns model lists.
 
 The empty provider list on a fresh container is the designed first-run posture: rows render only for `configured` providers; the catalog is reachable through the Add button. The failure the user saw was on the dropped all-in-one (agent-infra) image, whose profile composition broke the llm listing; it disappears with that image. CI for that build is green (Build and Push + smoke); the E2E workflow's red run is the upstream no-key preflight guard (`DEEPSEek_API_KEY_EXTERNAL` unset on the fork), not a regression.
+
+## Deployment knobs (2026-10-13): DSH_TRUSTED_HOSTS and DSH_WEB_TOKEN
+
+Two environment variables now shape the web composition: `DSH_TRUSTED_HOSTS` (space-separated authorities) appends entries to the /api Host-fence `trustedHosts`, fixing the HTTP 403 remote browsers hit when the derived container-IP trust never matches the host LAN IP or proxied domain they actually type; `DSH_WEB_TOKEN` sets a fixed exchange token the sign-in page accepts beside the per-boot launch token, so sign-in no longer requires scraping container logs. Both are wired through `packages/bundle/web-app/cordis.patch.yml` (comma-free `!!js` expressions; a comma inside a plain YAML scalar breaks flow parsing), documented in the web-app README's public-deployments section, and covered by the CI smoke (fixed-token 303 exchange, declared-host 401 past the fence, undeclared-host 403).

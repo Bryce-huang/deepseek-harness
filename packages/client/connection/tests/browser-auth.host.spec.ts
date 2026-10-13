@@ -55,8 +55,9 @@ function createAuth(
   store: RecordCredentials,
   maxAgeDays = 30,
   processOwner: object = {},
+  webToken?: string,
 ): Promise<BrowserAuth> {
-  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays)
+  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays, webToken)
 }
 
 function request(url: string, authority = '127.0.0.1:3080', init?: {
@@ -221,6 +222,33 @@ describe('BrowserAuth', () => {
       'cache-control': 'no-store',
       'content-type': 'text/plain; charset=utf-8',
     })
+  })
+
+  it('exchanges a deployment-configured token for a cookie beside the launch token', async () => {
+    const auth = await createAuth(new RecordCredentials(), 30, {}, 'deployment-secret')
+
+    const configured = response()
+    expect(auth.authorizeIndex(request('/?token=deployment-secret', '127.0.0.1:3080'), configured.value)).toBe(false)
+    expect(configured.state.status).toBe(303)
+    const configuredCookie = configured.state.headers?.['set-cookie']?.split(';', 1)[0]
+    if (configuredCookie === undefined) throw new Error('static-token exchange did not set a cookie')
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: configuredCookie }))).toBe(true)
+
+    const launch = exchange(auth)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: launch.cookie }))).toBe(true)
+
+    const page = response()
+    expect(auth.authorizeIndex(request('/', '127.0.0.1:3080', { accept: 'text/html' }), page.value)).toBe(false)
+    expect(page.state.body).toContain('DSH_WEB_TOKEN')
+
+    const wrong = response()
+    expect(auth.authorizeIndex(request('/?token=wrong', '127.0.0.1:3080', { accept: 'text/html' }), wrong.value)).toBe(false)
+    expect(wrong.state.body).toContain('Invalid token')
+
+    const strict = await createAuth(new RecordCredentials())
+    const refused = response()
+    expect(strict.authorizeIndex(request('/?token=deployment-secret', '127.0.0.1:3080'), refused.value)).toBe(false)
+    expect(refused.state.status).toBe(401)
   })
 
   it('rejects tampering, expiry, future issuance, and a longer lifetime than configured', async () => {

@@ -103,13 +103,18 @@ const PAGE_STYLES = `
 
 /**
  * Render the sign-in page for browser navigations.
- * @param options - rendering options; `invalidToken: true` adds the retry notice after a failed exchange.
+ * @param options - rendering options; `invalidToken: true` adds the retry notice after a
+ * failed exchange; `staticToken: true` points the hint at the deployment-configured token instead of the startup log.
  * @returns complete standalone HTML document.
  */
-export function renderLoginPage(options: { invalidToken?: boolean } = {}): string {
+export function renderLoginPage(options: { invalidToken?: boolean; staticToken?: boolean } = {}): string {
   const errorHtml = options.invalidToken === true
-    ? '<p class="error">Invalid token. Paste the token from the dsh web startup log and try again.</p>'
+    ? '<p class="error">Invalid token. Check the token and try again.</p>'
     : ''
+  const hintHtml = options.staticToken === true
+    ? '<p class="hint">Enter the access token configured for this deployment (DSH_WEB_TOKEN).</p>'
+    : `<p class="hint">The token is printed once per boot in the service log:<br>
+      <code>docker logs &lt;container&gt; 2&gt;&amp;1 | grep -o 'token=.*'</code></p>`
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -124,13 +129,12 @@ export function renderLoginPage(options: { invalidToken?: boolean } = {}): strin
     <h1 class="logo">d<span>sh</span></h1>
     <p class="tagline">DeepSeek Harness · web console</p>
     <form method="get">
-      <label for="token">Launch token</label>
+      <label for="token">Access token</label>
       <input id="token" name="token" type="password" autocomplete="off" autofocus required>
       <button type="submit">Sign in</button>
       ${errorHtml}
     </form>
-    <p class="hint">The token is printed once per boot in the service log:<br>
-      <code>docker logs &lt;container&gt; 2&gt;&amp;1 | grep -o 'token=.*'</code></p>
+    ${hintHtml}
   </main>
 </body>
 </html>

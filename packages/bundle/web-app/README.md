@@ -67,6 +67,8 @@ By default the GUI listens on loopback and accepts connections from this machine
 
 The printed URL contains a process credential; share it only with intended users, and `printUrl: false` suppresses the line with or without `--public-url`.
 
+The shipped composition also reads two deployment environment variables: `DSH_TRUSTED_HOSTS` (space-separated) appends authorities to the Host/Origin fence — the shape a container needs when its browsers arrive by a host LAN IP or proxied domain the runtime cannot derive — and `DSH_WEB_TOKEN` sets a fixed token the sign-in page accepts beside the per-boot launch token, so deployments stop fetching the credential from logs. A malformed `DSH_TRUSTED_HOSTS` entry fails plugin load.
+
 ### Running over SSH
 
 When you launch `dsh --profile web` over SSH, the URL line still prints but the browser is not opened for you: the SSH client or editor owns the local forwarding address. Without an advertised root the printed URL names the remote host's loopback endpoint, which you reach through your forwarding address. With `--public-url` the printed URL is the authenticated advertised root; the browser handoff stays suppressed, because opening a browser on the remote host cannot reach your screen.

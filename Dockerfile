@@ -99,6 +99,13 @@ ENV DSH_ALLOW_ALL_INTERFACES=1 \
     DSH_HOME=/dsh-home \
     NODE_ENV=production
 
+# The container serves browsers that arrive by whatever address the host
+# network exposes (host LAN IP, proxied domain) — unknowable at build time —
+# so the /api Host fence starts open (cookie authentication stays the gate).
+# Set DSH_TRUSTED_HOSTS to a space-separated authority list to re-tighten it,
+# or to an empty value to trust only loopback and the derived container IPs.
+ENV DSH_TRUSTED_HOSTS=*
+
 # dsh's persistent state (profiles, sessions) lives here, owned by the app
 # user; numeric ids need no passwd entry at build time.
 RUN mkdir -p /dsh-home && chown 6001:6000 /dsh-home

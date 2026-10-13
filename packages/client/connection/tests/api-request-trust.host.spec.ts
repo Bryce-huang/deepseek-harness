@@ -96,6 +96,20 @@ describe('isTrustedApiRequest', () => {
     }
   })
 
+  it('opens the Host allowlist on the wildcard entry while refusing cross-site markers', () => {
+    expect(() => { assertTrustedAuthority('*') }).not.toThrow()
+    expect(isTrustedApiRequest(request({ host: '10.0.0.9:8080' }), ['*'])).toBe(true)
+    expect(isTrustedApiRequest(request({ host: 'dsh.example:8080', origin: 'http://dsh.example:8080' }), ['*'])).toBe(true)
+    // Wildcard beside concrete entries: the allowlist opens, entries stay valid.
+    expect(isTrustedApiRequest(request({ host: 'any.host' }), ['harness.internal', '*'])).toBe(true)
+    // Cross-site and mismatched-Origin browser markers stay refused.
+    expect(isTrustedApiRequest(request({ host: 'x.example', origin: 'http://evil.example' }), ['*'])).toBe(false)
+    expect(isTrustedApiRequest(request({ host: 'x.example', 'sec-fetch-site': 'cross-site' }), ['*'])).toBe(false)
+    // A missing or unparsable Host never passes, wildcard or not.
+    expect(isTrustedApiRequest(request({}), ['*'])).toBe(false)
+    expect(isTrustedApiRequest(request({ host: 'bad host' }), ['*'])).toBe(false)
+  })
+
   it('never lets stray whitespace broaden an exact-port entry to every port', () => {
     // Defense in depth below the load-time assert: the explicit-port judgment
     // reads the parsed URL, so a trimmed `host:port ` entry stays exact.

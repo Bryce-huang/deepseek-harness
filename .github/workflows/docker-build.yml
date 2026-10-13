@@ -66,7 +66,6 @@ jobs:
         run: |
           docker run -d --name dsh-smoke -p 8080:8080 \
             -e DSH_WEB_TOKEN=smoke-fixed-token \
-            -e "DSH_TRUSTED_HOSTS=dsh-smoke.example" \
             "${REGISTRY}/${IMAGE_NAME}:${{ needs.build-and-push.outputs.tag }}"
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
@@ -91,10 +90,10 @@ jobs:
           [ "$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8080/?token=smoke-fixed-token')" = 303 ]
           curl -s -c /tmp/dsh-cookies.txt -o /dev/null 'http://localhost:8080/?token=smoke-fixed-token'
           [ "$(curl -s -b /tmp/dsh-cookies.txt -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 200 ]
-          # A declared DSH_TRUSTED_HOSTS authority passes the /api Host fence
-          # (401: past the fence, cookie not attached), an undeclared one 403s.
+          # The image's open-fence default (DSH_TRUSTED_HOSTS=*) lets the /api
+          # Host fence pass any serving authority (401: past the fence, cookie
+          # not attached) — zero-config remote access; auth stays the gate.
           [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: dsh-smoke.example' http://localhost:8080/api/ping)" = 401 ]
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' http://localhost:8080/api/ping)" = 403 ]
           # The per-boot launch token keeps working beside the configured one.
           TOKEN=$(docker logs dsh-smoke 2>&1 | grep -oE 'token=[A-Za-z0-9_-]+' | head -1 | cut -d= -f2)
           [ -n "$TOKEN" ] || { echo 'no launch token in logs'; exit 1; }

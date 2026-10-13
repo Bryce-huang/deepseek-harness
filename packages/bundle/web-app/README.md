@@ -67,7 +67,7 @@ By default the GUI listens on loopback and accepts connections from this machine
 
 The printed URL contains a process credential; share it only with intended users, and `printUrl: false` suppresses the line with or without `--public-url`.
 
-The shipped composition also reads two deployment environment variables: `DSH_TRUSTED_HOSTS` (space-separated) appends authorities to the Host/Origin fence — the shape a container needs when its browsers arrive by a host LAN IP or proxied domain the runtime cannot derive — and `DSH_WEB_TOKEN` sets a fixed token the sign-in page accepts beside the per-boot launch token, so deployments stop fetching the credential from logs. A malformed `DSH_TRUSTED_HOSTS` entry fails plugin load.
+The shipped composition also reads two deployment environment variables: `DSH_TRUSTED_HOSTS` (space-separated) appends authorities to the Host/Origin fence — the shape a container needs when its browsers arrive by a host LAN IP or proxied domain the runtime cannot derive — and `DSH_WEB_TOKEN` sets a fixed token the sign-in page accepts beside the per-boot launch token, so deployments stop fetching the credential from logs. The sole entry `*` drops the Host allowlist for fence-open deployments whose serving authority is unknowable at start (cross-site browser markers stay refused and cookie authentication stays the gate). A malformed `DSH_TRUSTED_HOSTS` entry fails plugin load.
 
 ### Running over SSH
 

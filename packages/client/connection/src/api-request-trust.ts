@@ -16,6 +16,9 @@
 import { isLoopbackHostname } from './loopback-hostname.ts'
 import type { ConnectionTrustRequest } from './rpc.ts'
 
+/** The one non-authority `trustedHosts` entry: accept any Host (fence-open deployment). */
+const OPEN_FENCE_ENTRY = '*'
+
 function header(headers: ConnectionTrustRequest['headers'], name: string): string | undefined {
   if (headers instanceof Headers) return headers.get(name) ?? undefined
   const value = headers[name]
@@ -47,6 +50,7 @@ function parseAuthority(authority: string): URL | undefined {
  * @param entry - the configured value, verbatim.
  */
 export function assertTrustedAuthority(entry: string): void {
+  if (entry === OPEN_FENCE_ENTRY) return
   const entryUrl = parseAuthority(entry)
   if (entryUrl !== undefined && canonicalAuthority(entry, entryUrl) === entry.toLowerCase()) return
   throw new Error(`client-connection: trustedHosts entry ${JSON.stringify(entry)} is not a bare host[:port] authority`)
@@ -85,7 +89,9 @@ function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): bool
 /**
  * Decide whether one /api request may reach the RPC bridge.
  * @param request - Node HTTP or Fetch request facts (headers).
- * @param trustedHosts - non-loopback authorities this deployment serves: exact `host:port`, or port-less `host` matching any port.
+ * @param trustedHosts - non-loopback authorities this deployment serves: exact `host:port`, or port-less `host`
+ * matching any port; the single entry `*` drops the Host allowlist for fence-open deployments whose serving
+ * authority is unknowable at start (cross-site markers stay refused; cookie authentication stays the gate).
  * @returns true when the Host is ours (loopback or trusted) and any attached browser markers are same-origin.
  */
 export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHosts: readonly string[]): boolean {
@@ -95,12 +101,15 @@ export function isTrustedApiRequest(request: ConnectionTrustRequest, trustedHost
   // server. There is no marker shortcut — a browser read over plain HTTP
   // (images and navigations) arrives with neither Origin nor
   // Fetch-Metadata, indistinguishable from curl, and its response is readable
-  // by the rebound page.
+  // by the rebound page. The wildcard entry skips only this allowlist: the
+  // Host must still parse, cross-site markers stay refused, and
+  // authentication still applies.
   const host = header(request.headers, 'host')
   if (host === undefined) return false
   const hostUrl = parseAuthority(host)
   if (hostUrl === undefined) return false
-  if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
+  const openFence = trustedHosts.includes(OPEN_FENCE_ENTRY)
+  if (!openFence && !isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
   // Cross-site fence: modern browsers label the initiator relationship on
   // every fetch; an explicit cross-site marker is refused regardless of Origin.
   if (header(request.headers, 'sec-fetch-site') === 'cross-site') return false

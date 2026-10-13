@@ -16,11 +16,11 @@
 # etc.) stay disabled by the web-app's cordis.patch.yml — see
 # packages/bundle/web-app/cordis.patch.yml.
 #
-# Deployment envs consumed by that composition: DSH_TRUSTED_HOSTS
-# (space-separated) adds Host/Origin-fence authorities for the names
-# browsers actually use (host LAN IP, proxied domain); DSH_WEB_TOKEN sets a
-# fixed sign-in token so the console-printed launch token is not the only
-# way in.
+# Deployment envs consumed by that composition: DSH_TRUSTED_HOSTS names the
+# Host/Origin-fence authorities browsers actually use (host LAN IP, proxied
+# domain; space-separated, or the image default `*` to accept any Host);
+# DSH_WEB_TOKEN sets a fixed sign-in token so the console-printed launch
+# token is not the only way in.
 
 set -eu
 

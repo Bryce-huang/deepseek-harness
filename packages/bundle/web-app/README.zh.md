@@ -55,6 +55,7 @@ dsh --profile web --no-open --port 8080
 | `surfaceContext` | `true` | 给 agent 提供 GUI 定位上下文，并把 `DSH_WEB_URL` 暴露给其 shell 命令 |
 | `publicUrl` | 未设置 | 对外公告的 HTTP(S) 应用根；否则公告监听器的 loopback URL |
 | `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
+| `remoteSettingsPersistence` | `memory` | 被服务的非回环页面的设置持久化：`host` 让部署上经认证的远端页面读写 Host 设置文档；回环页面始终持久化到 Host 端 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)列出了本运行时插件接受的字段及其 JSDoc。随发行版交付的组合插入 `schedule` 服务行与 `ui-schedule` 任务页面行，时钟读数与四个提醒工具则属于 `standard`、`cordis` 与 `ptc` 三个 preset。这三个 preset 的 `tool-subagent` 与 `tool-subagent-fork` 两行都 deny 这四个工具，因此被委派子 agent 的作用域不会列出它们。
 
@@ -66,6 +67,8 @@ dsh --profile web --no-open --port 8080
 `--public-url` 公告浏览器使用的 HTTP(S) 根——打印与打开的启动 URL、`DSH_WEB_URL` 与 web 表层定位。公告不授予任何信任：浏览器可见的 authority 还必须用 `--trusted-host` 点名。该 flag 不配置监听器、路由或 cookie 作用域，因为外部链路归代理所有：[在反向代理之后发布 Web UI](../../../docs/user/guide/public-deployments.zh.md)列出了这样的部署必须提供什么。
 
 打印的 URL 包含进程凭据，只应与预期用户分享；`printUrl: false` 无论是否配置 `--public-url` 都会抑制该行。
+
+随发行版交付的组合还读取两个部署环境变量：`DSH_TRUSTED_HOSTS`（空格分隔）向 Host/Origin 栅栏追加 authority——容器在浏览器经宿主机局域网 IP 或运行时无法推导的代理域名到达时需要这种形态；`DSH_WEB_PASSWORD` 设置一个固定令牌，登录页在每次启动的 launch token 之外接受它，部署因此不再需要从日志取凭据。唯一条目 `*` 撤掉 Host 允许名单，供对外服务 authority 在启动时不可知的栅栏开放部署使用（跨站浏览器标记仍被拒绝，cookie 认证仍是关卡）。格式非法的 `DSH_TRUSTED_HOSTS` 条目使插件加载失败。该组合同时设置 `remoteSettingsPersistence: host`：在这个单操作者令牌部署里每个通过认证的远端页面都是操作者本人，因此被服务的非回环页面把设置持久化到 Host 端而不是留在进程内（回环页面本就如此）。
 
 ### 通过 SSH 运行
 

@@ -24,6 +24,11 @@ export type {
   SettingsDescribeFace, SettingsDescribeView, SettingsMirrorSnapshot,
 } from './settings-mirror.ts'
 
+/** Page global the serving deployment injects to set served-page settings persistence. */
+interface SettingsPersistenceGlobal {
+  __DSH_SETTINGS_REMOTE_PERSISTENCE__?: 'host' | 'memory'
+}
+
 /**
  * Required services: the Remote namespace the mirror reads through and the
  * forwarded settings invalidation it refreshes on.
@@ -35,8 +40,13 @@ export const inject = ['remote', 'remote.settings']
  */
 export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
-  // Every form uses the persistence mode resolved from the connected Host.
-  const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+  // Every form uses the persistence mode resolved from the connected Host: a
+  // loopback page is the operator's machine, and a deployment whose remote
+  // pages are operator-owned (single-user token sign-in) injects the boot
+  // global to persist them host-side; the default keeps remote pages
+  // process-local.
+  const remotePersistence = (globalThis as SettingsPersistenceGlobal).__DSH_SETTINGS_REMOTE_PERSISTENCE__
+  const persistence = ctx.remote.$host.isLoopback ? 'host' : (remotePersistence ?? 'memory')
   const mirror = new SettingsDescribeMirror(ctx, persistence)
   ctx.effect(() => {
     const disposers = [

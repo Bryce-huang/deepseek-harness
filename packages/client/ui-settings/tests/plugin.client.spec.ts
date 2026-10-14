@@ -5,13 +5,33 @@ import { apply, inject } from '../src/client/index.ts'
 import { SettingsSchemaService } from '../src/client/schema.ts'
 import { ConfigForms } from '../src/client/config-form.ts'
 
-function bench() {
+/** Page global the serving deployment injects to set served-page settings persistence. */
+interface SettingsPersistenceGlobal {
+  __DSH_SETTINGS_REMOTE_PERSISTENCE__?: 'host' | 'memory'
+}
+
+/** Page conditions the persistence resolution reads: Host loopback plus the boot global. */
+interface Page {
+  isLoopback?: boolean
+  remotePersistence?: 'host' | 'memory'
+}
+
+function bench(page: Page = {}) {
   const describeCall = vi.fn().mockResolvedValue({
     ok: true, value: { writable: true, hasDocument: true, namespaces: [] },
   })
   const ctx = new Context()
   const remote = new TestRemote(ctx, { settings: { describe: describeCall } })
-  return { ctx, describeCall, remote, fiber: ctx.plugin({ inject: [...inject], apply }) }
+  remote.$host.isLoopback = page.isLoopback ?? true
+  const globals = globalThis as SettingsPersistenceGlobal
+  const prior = globals.__DSH_SETTINGS_REMOTE_PERSISTENCE__
+  if (page.remotePersistence === undefined) delete globals.__DSH_SETTINGS_REMOTE_PERSISTENCE__
+  else globals.__DSH_SETTINGS_REMOTE_PERSISTENCE__ = page.remotePersistence
+  const restoreGlobal = (): void => {
+    if (prior === undefined) delete globals.__DSH_SETTINGS_REMOTE_PERSISTENCE__
+    else globals.__DSH_SETTINGS_REMOTE_PERSISTENCE__ = prior
+  }
+  return { ctx, describeCall, remote, restoreGlobal, fiber: ctx.plugin({ inject: [...inject], apply }) }
 }
 
 describe('settings domain base plugin', () => {
@@ -44,5 +64,27 @@ describe('settings domain base plugin', () => {
     ctx.emit('connection/reset')
     await Promise.resolve()
     expect(describeCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists host-side on a non-loopback page when the deployment opts in', async () => {
+    const { describeCall, restoreGlobal, fiber } = bench({ isLoopback: false, remotePersistence: 'host' })
+    try {
+      await fiber.await()
+      await vi.waitFor(() => { expect(describeCall).toHaveBeenCalledTimes(1) })
+    } finally {
+      restoreGlobal()
+    }
+  })
+
+  it('keeps a non-loopback page process-local without the deployment global', async () => {
+    const { ctx, describeCall, restoreGlobal, fiber } = bench({ isLoopback: false })
+    try {
+      await fiber.await()
+      expect(ctx.get('configForms')).toBeInstanceOf(ConfigForms)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(describeCall).not.toHaveBeenCalled()
+    } finally {
+      restoreGlobal()
+    }
   })
 })

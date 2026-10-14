@@ -90,6 +90,11 @@ jobs:
           [ "$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8080/?token=smoke-fixed-token')" = 303 ]
           curl -s -c /tmp/dsh-cookies.txt -o /dev/null 'http://localhost:8080/?token=smoke-fixed-token'
           [ "$(curl -s -b /tmp/dsh-cookies.txt -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 200 ]
+          # Served pages persist settings host-side, so the Models page works
+          # when reached by a pod IP or proxied domain (not just loopback).
+          curl -s -b /tmp/dsh-cookies.txt http://localhost:8080/ \
+            | grep -q 'globalThis\["__DSH_SETTINGS_REMOTE_PERSISTENCE__"\] = "host"' \
+            || { echo 'index page missing host-side remote settings persistence'; exit 1; }
           # The image's open-fence default (DSH_TRUSTED_HOSTS=*) lets the /api
           # Host fence pass any serving authority (401: past the fence, cookie
           # not attached) — zero-config remote access; auth stays the gate.

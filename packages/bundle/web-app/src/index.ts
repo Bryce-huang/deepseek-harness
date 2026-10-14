@@ -65,6 +65,15 @@ export interface Config {
   publicUrl?: string
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /**
+   * Settings persistence for served non-loopback pages: `memory` (the
+   * default) keeps them process-local, `host` lets the deployment's
+   * authenticated remote pages read and write the Host settings document —
+   * the single-user deployments where every sign-in is the operator. The
+   * value reaches served pages as the `__DSH_SETTINGS_REMOTE_PERSISTENCE__`
+   * boot global; loopback pages always persist host-side.
+   */
+  remoteSettingsPersistence: 'host' | 'memory'
 }
 
 export const Config: z<Config> = z.object({
@@ -73,6 +82,7 @@ export const Config: z<Config> = z.object({
   surfaceContext: z.boolean().default(true),
   publicUrl: z.transform(z.string(), value => parsePublicUrl(value).href),
   trustedHosts: z.array(String).default([]),
+  remoteSettingsPersistence: z.union([z.const('host'), z.const('memory')]).default('memory'),
 })
 
 /** Bind-dependent Web values shared by the trust fence and URL display. */
@@ -249,6 +259,9 @@ export function apply(ctx: Context, config: Config): void {
   // Release dependent rows only after bind-dependent trust has been sampled once.
   ctx.provide(WEB_RUNTIME_SERVICE, runtime)
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
+  ctx.on('webserver/index-inject', (table) => {
+    table.push({ kind: 'global', name: '__DSH_SETTINGS_REMOTE_PERSISTENCE__', value: config.remoteSettingsPersistence })
+  })
   if (config.surfaceContext) {
     ctx.inject(['systemPrompt'], (promptCtx) => {
       addHarnessSourceSection(promptCtx, SOURCE_ROOT)

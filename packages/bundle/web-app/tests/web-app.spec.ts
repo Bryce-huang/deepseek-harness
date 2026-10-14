@@ -19,7 +19,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import type { IndexInjection, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import { apply, Config, internals } from '../src/index.ts'
 
 vi.mock('node:child_process', async importOriginal => ({
@@ -248,6 +248,23 @@ describe('web-app runtime glue', () => {
     expect(assembly.sections.some(entry => entry.name === 'app:web-surface')).toBe(false)
     expect(assembly.sections.some(entry => entry.name === 'harness:source')).toBe(false)
     expect(contributions).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
+  it('injects the remote-page settings persistence mode as an index global', async () => {
+    stageDist()
+    const ctx = new Context()
+    ctx.provide('webServer', fakeHttpServer().server)
+    apply(ctx, new Config({
+      openBrowser: false,
+      printUrl: false,
+      surfaceContext: false,
+      trustedHosts: [],
+      remoteSettingsPersistence: 'host',
+    }))
+    const table: IndexInjection[] = []
+    ctx.emit('webserver/index-inject', table)
+    expect(table).toEqual([{ kind: 'global', name: '__DSH_SETTINGS_REMOTE_PERSISTENCE__', value: 'host' }])
     await ctx.fiber.dispose()
   })
 

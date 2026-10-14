@@ -205,6 +205,11 @@
         publicUrl: !!js ctx.webStartup.publicUrl
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
+        # Single-operator deployment: every authenticated remote page is the
+        # operator, so served pages persist settings host-side instead of
+        # staying process-local (which leaves the Models page without a
+        # settings mirror on non-loopback access).
+        remoteSettingsPersistence: 'host'
 
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It

@@ -453,6 +453,12 @@ export interface ConnectionConfig {
    * bind. An entry that is not a bare, canonical authority fails plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Deployment-configured token the sign-in page exchanges for a browser
+   * cookie, accepted in addition to the per-process launch token. Empty
+   * means unset: only the launch token printed at startup signs in.
+   */
+  webToken?: string
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -4153,6 +4159,15 @@ export interface Config {
   publicUrl?: string
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /**
+   * Settings persistence for served non-loopback pages: `memory` (the
+   * default) keeps them process-local, `host` lets the deployment's
+   * authenticated remote pages read and write the Host settings document —
+   * the single-user deployments where every sign-in is the operator. The
+   * value reaches served pages as the `__DSH_SETTINGS_REMOTE_PERSISTENCE__`
+   * boot global; loopback pages always persist host-side.
+   */
+  remoteSettingsPersistence: 'host' | 'memory'
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-web-app -->

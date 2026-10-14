@@ -55,6 +55,7 @@ Saved model selections override the composition default. The settings card accep
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `publicUrl` | Unset | Advertised HTTP(S) application root; otherwise announce the listener's loopback URL |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
+| `remoteSettingsPersistence` | `memory` | Settings persistence for served non-loopback pages: `host` lets the deployment's authenticated remote pages read and write the Host settings document; loopback pages always persist host-side |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) lists this runtime plugin's accepted fields and their JSDoc. The shipped composition inserts the `schedule` service row and the `ui-schedule` task page row, while the clock reading and the four reminder tools belong to the `standard`, `cordis`, and `ptc` presets. The `tool-subagent` and `tool-subagent-fork` rows in those presets deny the four tools, so a delegated child's scope never lists them.
 
@@ -67,7 +68,7 @@ By default the GUI listens on loopback and accepts connections from this machine
 
 The printed URL contains a process credential; share it only with intended users, and `printUrl: false` suppresses the line with or without `--public-url`.
 
-The shipped composition also reads two deployment environment variables: `DSH_TRUSTED_HOSTS` (space-separated) appends authorities to the Host/Origin fence — the shape a container needs when its browsers arrive by a host LAN IP or proxied domain the runtime cannot derive — and `DSH_WEB_PASSWORD` sets a fixed token the sign-in page accepts beside the per-boot launch token, so deployments stop fetching the credential from logs. The sole entry `*` drops the Host allowlist for fence-open deployments whose serving authority is unknowable at start (cross-site browser markers stay refused and cookie authentication stays the gate). A malformed `DSH_TRUSTED_HOSTS` entry fails plugin load.
+The shipped composition also reads two deployment environment variables: `DSH_TRUSTED_HOSTS` (space-separated) appends authorities to the Host/Origin fence — the shape a container needs when its browsers arrive by a host LAN IP or proxied domain the runtime cannot derive — and `DSH_WEB_PASSWORD` sets a fixed token the sign-in page accepts beside the per-boot launch token, so deployments stop fetching the credential from logs. The sole entry `*` drops the Host allowlist for fence-open deployments whose serving authority is unknowable at start (cross-site browser markers stay refused and cookie authentication stays the gate). A malformed `DSH_TRUSTED_HOSTS` entry fails plugin load. The composition also sets `remoteSettingsPersistence: host`: in this single-operator token deployment every authenticated remote page is the operator, so served non-loopback pages persist settings host-side instead of staying process-local (loopback pages always did).
 
 ### Running over SSH
 

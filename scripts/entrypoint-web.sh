@@ -19,7 +19,7 @@
 # Deployment envs consumed by that composition: DSH_TRUSTED_HOSTS names the
 # Host/Origin-fence authorities browsers actually use (host LAN IP, proxied
 # domain; space-separated, or the image default `*` to accept any Host);
-# DSH_WEB_TOKEN sets a fixed sign-in token so the console-printed launch
+# DSH_WEB_PASSWORD sets a fixed sign-in token so the console-printed launch
 # token is not the only way in.
 
 set -eu

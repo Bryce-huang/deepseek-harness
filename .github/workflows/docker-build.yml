@@ -65,7 +65,7 @@ jobs:
       - name: Start container
         run: |
           docker run -d --name dsh-smoke -p 8080:8080 \
-            -e DSH_WEB_TOKEN=smoke-fixed-token \
+            -e DSH_WEB_PASSWORD=smoke-fixed-token \
             "${REGISTRY}/${IMAGE_NAME}:${{ needs.build-and-push.outputs.tag }}"
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
@@ -82,8 +82,8 @@ jobs:
             || { echo 'sign-in page missing token form'; exit 1; }
           # The sign-in page is the only gate: no Basic-Auth challenge header.
           ! curl -s -D - -o /dev/null -H 'Accept: text/html' http://localhost:8080/ | grep -qi 'www-authenticate'
-          # The page hints at the deployment-configured token (DSH_WEB_TOKEN).
-          curl -s -H 'Accept: text/html' http://localhost:8080/ | grep -q 'DSH_WEB_TOKEN'
+          # The page hints at the deployment-configured token (DSH_WEB_PASSWORD).
+          curl -s -H 'Accept: text/html' http://localhost:8080/ | grep -q 'DSH_WEB_PASSWORD'
           # API clients keep the machine-readable body.
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 401 ]
           # The configured token exchanges for a cookie, no log scraping needed.

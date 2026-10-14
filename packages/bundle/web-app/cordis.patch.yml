@@ -235,9 +235,9 @@
         # a name the runtime cannot derive (proxied domains, host LAN IPs
         # behind a container bridge). A malformed entry fails plugin load.
         trustedHosts: !!js ctx.webRuntime.trustedHosts.concat((process.env.DSH_TRUSTED_HOSTS ?? '').split(/\s+/).filter(Boolean))
-        # A fixed sign-in token (DSH_WEB_TOKEN) accepted by the sign-in page
+        # A fixed sign-in token (DSH_WEB_PASSWORD) accepted by the sign-in page
         # alongside the per-boot launch token; unset keeps log-token-only sign-in.
-        webToken: !!js process.env.DSH_WEB_TOKEN || undefined
+        webToken: !!js process.env.DSH_WEB_PASSWORD || undefined
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.

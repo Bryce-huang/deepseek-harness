@@ -239,7 +239,7 @@ describe('BrowserAuth', () => {
 
     const page = response()
     expect(auth.authorizeIndex(request('/', '127.0.0.1:3080', { accept: 'text/html' }), page.value)).toBe(false)
-    expect(page.state.body).toContain('DSH_WEB_TOKEN')
+    expect(page.state.body).toContain('DSH_WEB_PASSWORD')
 
     const wrong = response()
     expect(auth.authorizeIndex(request('/?token=wrong', '127.0.0.1:3080', { accept: 'text/html' }), wrong.value)).toBe(false)

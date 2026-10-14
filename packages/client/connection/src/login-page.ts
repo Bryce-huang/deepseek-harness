@@ -112,7 +112,7 @@ export function renderLoginPage(options: { invalidToken?: boolean; staticToken?:
     ? '<p class="error">Invalid token. Check the token and try again.</p>'
     : ''
   const hintHtml = options.staticToken === true
-    ? '<p class="hint">Enter the access token configured for this deployment (DSH_WEB_TOKEN).</p>'
+    ? '<p class="hint">Enter the access token configured for this deployment (DSH_WEB_PASSWORD).</p>'
     : `<p class="hint">The token is printed once per boot in the service log:<br>
       <code>docker logs &lt;container&gt; 2&gt;&amp;1 | grep -o 'token=.*'</code></p>`
   return `<!DOCTYPE html>

@@ -2,9 +2,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { createRuntimeContext } from './setup.ts'
 import { PythonPtcRuntime, hostFrameParseCeiling, readProcessStart, resolvePythonBin } from '../src/index.ts'
 import { logTruncationMarker } from '../src/protocol.ts'
 import type { Config } from '../src/index.ts'
@@ -15,27 +15,8 @@ import type { Config } from '../src/index.ts'
 const PYABS = resolvePythonBin('python3') ?? 'python3'
 import type { PtcBindingFunction, PtcJsonValue, PtcRunResult } from '@deepseek-ai/dsh-ptc-runtime'
 
-/**
- * Names one `py/` script whose `copyFileSync` must fail, for the partial-staging
- * case. A real disk-full or missing-asset failure mid-copy cannot be produced
- * from a test, and the leak only shows when `mkdtempSync` has already succeeded.
- *
- * `stagedDirs` records every staging directory THIS test file creates, so the
- * leak assertions check the exact paths instead of a global tmpdir diff: a
- * parallel vitest worker running the same prefix could create or remove
- * `dsh-ptc-runtime-python-*` directories inside the sampling window, which a
- * readdir diff would misattribute to this test. `boot-write-failure.spec.ts`
- * records the same race and solves it with argv-based identity; recording the
- * mkdtempSync results is the fs-mock equivalent.
- */
-const { failNextCopyOf, stagedDirs, tempDirs, tempFiles } = vi.hoisted(() => ({
-  failNextCopyOf: { value: undefined as string | undefined },
-  stagedDirs: [] as string[],
-  // Test-created temp dirs/files, registered by the helpers below and removed
-  // after each test: a suite run over real python3 subprocesses must not
-  // permanently accumulate `dsh-*` fixtures in the shared tmpdir (the runtime
-  // cleans its own per-run staging dir; these are the stubs and wrappers the
-  // tests themselves build).
+const { failNextReadOf, tempDirs, tempFiles } = vi.hoisted(() => ({
+  failNextReadOf: { value: undefined as string | undefined },
   tempDirs: [] as string[],
   tempFiles: [] as string[],
 }))
@@ -43,29 +24,19 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
     ...actual,
-    copyFileSync(source: string, destination: string): void {
-      if (failNextCopyOf.value !== undefined && basename(source) === failNextCopyOf.value) {
-        failNextCopyOf.value = undefined
-        throw Object.assign(new Error('simulated ENOSPC on copy'), { code: 'ENOSPC' })
+    readFileSync(...args: Parameters<typeof actual.readFileSync>) {
+      if (failNextReadOf.value !== undefined && String(args[0]).endsWith(`/${failNextReadOf.value}`)) {
+        failNextReadOf.value = undefined
+        throw Object.assign(new Error('simulated missing packaged script'), { code: 'ENOENT' })
       }
-      actual.copyFileSync(source, destination)
-    },
-    mkdtempSync(prefix: string): string {
-      const dir = actual.mkdtempSync(prefix)
-      if (basename(prefix).startsWith('dsh-ptc-runtime-python-')) stagedDirs.push(dir)
-      return dir
+      return actual.readFileSync(...args)
     },
   }
 })
 
-/**
- * Integration suite over REAL python3 subprocesses (no subprocess mocks — it is
- * cheap and local, per docs/testing.md's real-over-mock policy; the only mock is
- * `node:fs.copyFileSync` for the staging-failure cases). Each test builds a fresh
- * runtime so budgets can be tuned per case.
- */
+/** Real CPython processes; packaged-source read failures use the narrow fs mock above. */
 async function setup(config: Config = {}) {
-  const ctx = new Context()
+  const ctx = await createRuntimeContext()
   const fiber = await ctx.plugin(PythonPtcRuntime, config)
   const runtime = ctx.ptcRuntime as PythonPtcRuntime
   return { ctx, fiber, runtime }
@@ -102,25 +73,30 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     const { runtime } = await setup()
     expect(runtime.language).toBe('python')
     expect(runtime.isolation).toBe('process')
+    expect(runtime.executionInstructions).toBe('The program is the body of an async Python function. Top-level await and return are supported. Emit output with print(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Python process; variables and imported modules do not persist across calls. Relative paths use the supplied working directory; only TMPDIR is set in the environment. Direct filesystem access follows this execution\'s sandbox policy.')
   })
 
   it('resolves its configured deadline and cwd while refusing unsupported execution choices', async () => {
     const { runtime, fiber } = await setup({ maxWallMs: 30_000 })
     try {
       const request = { program: 'return 1', bindings: [] }
-      expect(runtime.sandboxMode).toBeUndefined()
-      expect(runtime.resolve(request)).toEqual({ ...request, cwd: process.cwd(), timeoutMs: 30_000 })
+      expect(runtime.sandboxMode).toBe('danger-full-access')
+      expect(runtime.resolve(request)).toEqual({ ...request, cwd: process.cwd(), timeoutMs: 30_000, sandboxPolicy: { mode: 'danger-full-access', workspaceRoot: process.cwd() } })
       const cwd = await makeTempDir('dsh-py-resolved-cwd-')
       const spec = runtime.resolve({ ...request, cwd })
       expect(spec.cwd).toBe(cwd)
       expect(() => runtime.resolve({ ...request, cwd: 'relative' })).toThrow('cwd must be absolute')
       expect(() => runtime.resolve({ ...request, timeoutMs: 1 })).toThrow('per-call timeout is unsupported')
       expect(() => runtime.resolve({ ...request, timeoutMs: null })).toThrow('per-call timeout is unsupported')
+      expect(() => runtime.resolve({ ...request, discardCompletion: true })).toThrow('discardCompletion is unsupported')
+      expect(runtime.resolve({ ...request, discardCompletion: false }).discardCompletion).toBe(false)
+      expect(() => runtime.registerEnvironmentInitializer('helper = {}')).toThrow('environment initialization is unsupported')
       const sandboxPolicy = { mode: 'danger-full-access' as const, workspaceRoot: cwd }
-      expect(() => runtime.resolve({ ...request, sandboxPolicy })).toThrow('sandbox policy is unsupported')
-      await expect(runtime.run({ ...spec, sandboxPolicy })).rejects.toThrow('unsupported execution policy or timeout')
-      await expect(runtime.run({ ...spec, timeoutMs: 1 })).rejects.toThrow('unsupported execution policy or timeout')
-      await expect(runtime.run({ ...spec, timeoutMs: null })).rejects.toThrow('unsupported execution policy or timeout')
+      expect(runtime.resolve({ ...request, sandboxPolicy }).sandboxPolicy).toBe(sandboxPolicy)
+      await expect(runtime.run({ ...request, cwd, timeoutMs: 30_000 })).rejects.toThrow('run requires a resolved sandbox policy')
+      await expect(runtime.run({ ...spec, cwd: 'relative' })).rejects.toThrow('cwd must be absolute')
+      await expect(runtime.run({ ...spec, timeoutMs: 1 })).rejects.toThrow('unsupported execution timeout')
+      await expect(runtime.run({ ...spec, timeoutMs: null })).rejects.toThrow('unsupported execution timeout')
       const result = await runtime.run(runtime.resolve({ ...request, cwd, program: 'import os\nreturn os.getcwd()' }))
       expect(result.error).toBeUndefined()
       expect(result.value).toBe(realpathSync(cwd))
@@ -128,7 +104,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
   })
 
   it('rejects non-positive config as seam misuse', async () => {
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { cpuSeconds: 0 }))
       .rejects.toThrow(/cpuSeconds must be a positive number/)
     await expect(ctx.plugin(PythonPtcRuntime, { maxWallMs: -1 }))
@@ -136,7 +112,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
   })
 
   it('rejects a non-integer cpuSeconds at load (setrlimit needs an int)', async () => {
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { cpuSeconds: 1.5 }))
       .rejects.toThrow(/cpuSeconds must be a positive integer, got 1.5/)
   })
@@ -145,10 +121,10 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     // maxLogBytes/maxValueBytes cross to the child, which reads them through
     // int(...): a float would floor there while the host meters the fraction, so
     // the two sides would enforce different public config. Reject at load.
-    const ctxLog = new Context()
+    const ctxLog = await createRuntimeContext()
     await expect(ctxLog.plugin(PythonPtcRuntime, { maxLogBytes: 3.5 }))
       .rejects.toThrow(/maxLogBytes must be a positive integer/)
-    const ctxValue = new Context()
+    const ctxValue = await createRuntimeContext()
     await expect(ctxValue.plugin(PythonPtcRuntime, { maxValueBytes: 1024.5 }))
       .rejects.toThrow(/maxValueBytes must be a positive integer/)
   })
@@ -161,7 +137,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     // far past the safe range, so `setrlimit` receives a different number than was
     // configured. Both used to end every run in a bootstrap exception instead of
     // failing at load, where a self-contained configuration error belongs.
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { addressSpaceMb: 1e308 }))
       .rejects.toThrow(/addressSpaceMb must be at most \d+ .*exact integer/)
     await expect(ctx.plugin(PythonPtcRuntime, { cpuSeconds: 1e100 }))
@@ -187,7 +163,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     // worker-exit), so a budget above it would admit a config whose honest
     // child frames the host then rejects.
     const admissible = 64 * 1024 * 1024 - 64
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { maxLogBytes: admissible + 1 }))
       .rejects.toThrow(/maxLogBytes must not exceed 67108800/)
     await expect(ctx.plugin(PythonPtcRuntime, { maxValueBytes: admissible + 1 }))
@@ -212,6 +188,9 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
       "import { Context } from '@deepseek-ai/cordis'",
       "import { PythonPtcRuntime } from './packages/experimental/ptc-runtime-python/src/index.ts'",
       'const ctx = new Context()',
+      "await ctx.plugin((await import('./packages/session/session-projection/src/index.ts')).default)",
+      "await ctx.plugin((await import('./packages/sandbox/sandbox-policy/src/index.ts')).default, { mode: 'danger-full-access' })",
+      "await ctx.plugin((await import('./packages/sandbox/sandbox-local/src/index.ts')).default, {})",
       'try {',
       '  await ctx.plugin(PythonPtcRuntime, { maxValueBytes: 50 * 1024 * 1024, addressSpaceMb: 1024 })',
       "  console.log('LOADED')",
@@ -267,7 +246,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     // path, ERR_INVALID_ARG_TYPE for the NUL — so run() would REJECT instead of
     // resolving the worker-exit the seam promises for a child that cannot
     // start. Both are self-contained configuration errors, so they fail here.
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { pythonBin: '' }))
       .rejects.toThrow(/pythonBin must be a non-empty path without NUL bytes/)
     await expect(ctx.plugin(PythonPtcRuntime, { pythonBin: 'py\u0000thon3' }))
@@ -289,19 +268,19 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     const directory = nodePath.join(dir, 'is-a-directory')
     mkdirSync(directory)
     try {
-      const missing = new Context()
+      const missing = await createRuntimeContext()
       await expect(missing.plugin(PythonPtcRuntime, { pythonBin: nodePath.join(dir, 'missing') }))
         .rejects.toThrow(/is not an executable regular file/)
-      const noX = new Context()
+      const noX = await createRuntimeContext()
       await expect(noX.plugin(PythonPtcRuntime, { pythonBin: notExecutable }))
         .rejects.toThrow(/is not an executable regular file/)
-      const isDir = new Context()
+      const isDir = await createRuntimeContext()
       await expect(isDir.plugin(PythonPtcRuntime, { pythonBin: directory }))
         .rejects.toThrow(/is not an executable regular file/)
       // A relative explicit path fails the same way, resolved against the host
       // CWD: `dir` is absolute, so a slash-containing relative form of it is
       // the dirname prefix plus the file, which does not exist as such.
-      const rel = new Context()
+      const rel = await createRuntimeContext()
       await expect(rel.plugin(PythonPtcRuntime, { pythonBin: './definitely-not-there-python' }))
         .rejects.toThrow(/is not an executable regular file/)
     } finally {
@@ -311,7 +290,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
   })
 
   it('rejects a non-CPython, outdated, or probe-failing interpreter at load', async () => {
-    const nonPython = new Context()
+    const nonPython = await createRuntimeContext()
     await expect(nonPython.plugin(PythonPtcRuntime, { pythonBin: '/bin/echo' }))
       .rejects.toThrow(/did not report a CPython version/)
 
@@ -328,19 +307,19 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     await writeFile(failed, '#!/bin/sh\nexit 7\n', { mode: 0o755 })
     try {
       expect(resolvePythonBin(relative(process.cwd(), old))).toBe(old)
-      const obsolete = new Context()
+      const obsolete = await createRuntimeContext()
       await expect(obsolete.plugin(PythonPtcRuntime, { pythonBin: oldMajor }))
         .rejects.toThrow(/must be CPython 3\.10 or newer, got cpython 2\.99\.0/)
-      const outdated = new Context()
+      const outdated = await createRuntimeContext()
       await expect(outdated.plugin(PythonPtcRuntime, { pythonBin: old }))
         .rejects.toThrow(/must be CPython 3\.10 or newer, got cpython 3\.9\.6/)
-      const forwardCompatible = new Context()
+      const forwardCompatible = await createRuntimeContext()
       const fiber = await forwardCompatible.plugin(PythonPtcRuntime, { pythonBin: future })
       await fiber.dispose()
-      const alternative = new Context()
+      const alternative = await createRuntimeContext()
       await expect(alternative.plugin(PythonPtcRuntime, { pythonBin: pypy }))
         .rejects.toThrow(/must be CPython, got pypy/)
-      const probeFailure = new Context()
+      const probeFailure = await createRuntimeContext()
       await expect(probeFailure.plugin(PythonPtcRuntime, { pythonBin: failed }))
         .rejects.toThrow(/failed the CPython version probe/)
     } finally {
@@ -519,7 +498,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     // 1 ms for anything larger, inverting the knob's meaning: a huge maxWallMs
     // would time every run out at once, and a huge graceMs would SIGKILL one
     // millisecond after SIGTERM. Both must fail at load instead.
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { maxWallMs: 2_147_483_648 }))
       .rejects.toThrow(/maxWallMs must not exceed 2147483647/)
     // graceMs is bounded by the close deadline's added margin, not by the raw
@@ -539,7 +518,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     const original = process.platform
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     try {
-      const ctx = new Context()
+      const ctx = await createRuntimeContext()
       await expect(ctx.plugin(PythonPtcRuntime, {})).rejects.toThrow(/requires a Unix platform/)
     } finally {
       Object.defineProperty(process, 'platform', { value: original, configurable: true })
@@ -571,9 +550,10 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
 
   it('rejects run() after disposal, and unregisters ctx.ptcRuntime', async () => {
     const { ctx, fiber, runtime } = await setup()
+    const spec = runtime.resolve({ program: 'return 1', bindings: [] })
     await fiber.dispose()
-    await expect(runtime.run(runtime.resolve({ program: 'return 1', bindings: [] })))
-      .rejects.toThrow(/after disposal/)
+    await expect(runtime.run(spec)).rejects.toThrow(/after disposal/)
+    expect(() => runtime.resolve({ program: 'return 1', bindings: [] })).toThrow(/after disposal/)
     expect(ctx.get('ptcRuntime')).toBeUndefined()
   })
 
@@ -583,7 +563,7 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     const result = await runtime.run(runtime.resolve({ program: 'return 1', bindings: [], signal }))
     expect(result.error?.kind).toBe('abort')
     expect(result.error?.message).toContain('already-cancelled')
-    expect(result.logs).toEqual([])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([])
   })
 
   it('short-circuits on an already-aborted signal whose reason cannot be converted', async () => {
@@ -597,104 +577,65 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     const result = await runtime.run(runtime.resolve({ program: 'return 1', bindings: [], signal }))
     expect(result.error?.kind).toBe('abort')
     expect(result.error?.message).toBe('<unrenderable rejection value>')
-    expect(result.logs).toEqual([])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([])
   })
 
-  it('runs the interpreter from materialized scripts outside the package, and removes them per run', async () => {
-    // The interpreter is an EXTERNAL process, so it can only open paths the OS
-    // resolves. Inside the single-file Python-SDK executable the packaged `py/`
-    // directory lives in pkg's virtual filesystem, which Node reads through its
-    // patched `fs` but `python3` cannot see, so spawning from that path fails
-    // with ENOENT. The scripts are therefore copied to a real directory first.
-    //
-    // The path is read from the child's own `__main__` module, so it proves
-    // where the interpreter actually loaded the entry script — asserting on a
-    // host-side constant would only restate the source. The program namespace
-    // seeds `__name__` but no `__file__`, hence the module lookup.
-    // `protocol.py` must land in the SAME directory, since `bootstrap.py` puts
-    // its own directory on `sys.path` to import it; the run completing at all
-    // already exercises that import.
+  it('delivers packaged Python modules without exposing a writable bootstrap file', async () => {
     const { runtime } = await setup()
-    const entryOf = async (): Promise<string> => {
-      const result = await runtime.run(runtime.resolve({ program: 'import sys\nreturn sys.modules["__main__"].__file__', bindings: [] }))
-      expect(result.error).toBeUndefined()
-      return result.value as string
-    }
-    const entry = await entryOf()
-    expect(entry.endsWith('/bootstrap.py')).toBe(true)
-    const dir = dirname(entry)
-    expect(realpathSync(dirname(dir))).toBe(realpathSync(tmpdir()))
-    expect(basename(dir)).toMatch(/^dsh-ptc-runtime-python-/)
-    expect(dir).not.toContain('/packages/')
-    // Staging is per RUN and removed at settlement, so by the time `run()`
-    // resolved the directory is already gone — nothing survives to be rewritten
-    // by a later run. `protocol.py` had to be beside the entry script for the run
-    // to complete at all, since `bootstrap.py` imports it off `sys.path`.
-    expect(existsSync(dir)).toBe(false)
-    // A second run stages its own copy rather than reusing the first.
-    expect(dirname(await entryOf())).not.toBe(dir)
+    const result = await runtime.run(runtime.resolve({
+      program: 'import sys, protocol\nreturn [hasattr(sys.modules["__main__"], "__file__"), protocol.__file__, sys.stdin.read()]',
+      bindings: [],
+    }))
+    expect(result.error).toBeUndefined()
+    expect(result.value).toEqual([false, '<dsh-ptc-protocol>', ''])
   })
 
-  it('contains a program that rewrites its own bootstrap to the run that did it', async () => {
-    // The child runs as the same UID as the host, so `0o700` does not stop model
-    // code from rewriting the scripts it was started from —
-    // `sys.modules['__main__'].__file__` names them. While all runs shared one
-    // staged copy, a program that overwrote `bootstrap.py` broke the NEXT run
-    // (measured: it settled as `worker-exit`), and substituted code would have
-    // run before the resource limits were applied.
-    const { runtime } = await setup({ maxWallMs: 10_000 })
-    const sabotage = await runtime.run(runtime.resolve({
+  it('starts a spawn-context ProcessPoolExecutor with an importable function', async () => {
+    const { runtime } = await setup({ maxWallMs: 30_000 })
+    const result = await runtime.run(runtime.resolve({
       program: [
-        'import sys',
-        'path = sys.modules["__main__"].__file__',
-        'open(path, "w").write("raise SystemExit(1)\\n")',
-        'return path',
+        'from concurrent.futures import ProcessPoolExecutor',
+        'from multiprocessing import get_context',
+        'with ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn")) as pool:',
+        '    return pool.submit(abs, -42).result()',
       ].join('\n'),
       bindings: [],
     }))
-    expect(sabotage.error).toBeUndefined()
-    // The damage stayed inside the run that caused it.
-    const after = await runtime.run(runtime.resolve({ program: 'return 1 + 1', bindings: [] }))
-    expect(after.error).toBeUndefined()
-    expect(after.value).toBe(2)
-  }, 20_000)
+    expect(result.error).toBeUndefined()
+    expect(result.value).toBe(42)
+  })
 
-  it('leaves no subprocess or scripts behind when disposal races the first run', async () => {
-    // Staging runs SYNCHRONOUSLY so no async boundary opens between `run()` and
-    // the point where `execute` registers the run in `live` and installs the
-    // abort listener. With an `await` there, a disposal landing in that window
-    // saw an empty `live`, returned, removed the script directory, and let the
-    // continuation spawn a subprocess after the fiber was gone.
-    //
-    // `dispose()` is called in the same synchronous turn as `run()`, with no
-    // `await` between them, so it lands exactly in that window.
-    //
-    // The leak assertion checks the EXACT paths this test file staged (recorded
-    // by the mocked mkdtempSync) rather than diffing a global tmpdir: a
-    // parallel vitest worker can create or remove same-prefix directories
-    // inside the sampling window, which a readdir diff would misattribute to
-    // this test (boot-write-failure.spec.ts records the same race).
-    const stagedBefore = stagedDirs.length
+  it('decodes packaged source as UTF-8 when the interpreter stdin uses ASCII', async () => {
+    const wrapper = join(await makeTempDir('dsh-python-ascii-'), 'python-ascii')
+    await writeFile(wrapper, `#!/bin/sh\nLC_ALL=C exec "${PYABS}" -X utf8=0 "$@"\n`, { mode: 0o755 })
+    const { runtime } = await setup({ pythonBin: wrapper })
+    const result = await runtime.run(runtime.resolve({ program: 'import sys\nreturn [sys.stdin.encoding, "你好"]', bindings: [] }))
+    expect(result.error).toBeUndefined()
+    expect(result.value).toEqual(['ascii', '你好'])
+  })
+
+  it('preserves the kernel CPU soft limit while Python is executing native C code', async () => {
+    const { runtime } = await setup({ cpuSeconds: 1, maxWallMs: 30_000 })
+    const result = await runtime.run(runtime.resolve({
+      program: 'import hashlib\nhashlib.pbkdf2_hmac("sha256", b"password", b"salt", 2147483647)\nreturn "escaped"',
+      bindings: [],
+    }))
+    expect(result.error?.kind).toBe('timeout')
+    expect(result.error?.message).toContain('CPU time exhausted')
+    expect(result.value).toBeUndefined()
+  })
+
+  it('disposes the first run before any program can outlive its provider', async () => {
     const { fiber, runtime } = await setup({ maxWallMs: 8_000 })
     const pending = runtime.run(runtime.resolve({ program: 'import time\nwhile True: time.sleep(0.1)', bindings: [] }))
     const disposed = fiber.dispose()
     const result = await pending
     await disposed
-    // Whatever the run reports, it must be terminal and must not be a success.
     expect(result.value).toBeUndefined()
-    expect(['abort', 'worker-exit', 'timeout']).toContain(result.error?.kind)
-    // Disposal is to quiescence, so every directory this run staged is gone.
-    const created = stagedDirs.slice(stagedBefore)
-    for (const dir of created) expect(existsSync(dir)).toBe(false)
-  }, 15_000)
+    expect(result.error?.kind).toBe('abort')
+  })
 
   it('settles as abort when the signal fires in the same turn as the first run', async () => {
-    // Same window, the other listener. `addEventListener('abort')` does not
-    // replay an event that already fired, so an abort landing before the
-    // listener was installed used to be missed entirely and the program ran to
-    // success or the wall ceiling instead of resolving as `abort`. Synchronous
-    // staging keeps the pre-flight check and the listener in one turn, leaving
-    // no gap for the signal to slip through.
     const { runtime } = await setup({ maxWallMs: 4_000, graceMs: 200 })
     const controller = new AbortController()
     const pending = runtime.run(runtime.resolve({
@@ -706,58 +647,37 @@ describe('PythonPtcRuntime — seam descriptors and misuse', () => {
     const result = await pending
     expect(result.error?.kind).toBe('abort')
     expect(result.error?.message).toContain('same-turn-abort')
-  }, 15_000)
+  })
 
-  it('reports a staging failure as worker-exit instead of rejecting run()', async () => {
-    // Staging touches the filesystem, so it can fail for reasons that are not
-    // the caller's doing: a full or read-only temp filesystem, or a deployment
-    // that failed to ship the packaged scripts. Those are SUBSTRATE failures,
-    // the same class as a child that cannot start, and the seam reserves
-    // rejection for misuse — so `run()` must resolve, not throw.
-    //
-    // `TMPDIR` is the honest lever: `mkdtempSync` builds its path from
-    // `os.tmpdir()`, so pointing it at a path that is not a directory makes the
-    // real call fail without stubbing the module under test.
+  it('boots when the host temporary directory cannot hold files', async () => {
     const previous = process.env.TMPDIR
-    const notADirectory = join(await makeTempDir('dsh-staging-'), 'file')
+    const notADirectory = join(await makeTempDir('dsh-bootstrap-'), 'file')
     await writeFile(notADirectory, '')
     process.env.TMPDIR = notADirectory
     try {
       const { runtime } = await setup()
-      const result = await runtime.run(runtime.resolve({ program: 'return 1', bindings: [] }))
-      expect(result.error?.kind).toBe('worker-exit')
-      expect(result.error?.message).toContain('failed to stage the python bootstrap')
-      expect(result.logs).toEqual([])
+      const result = await runtime.run(runtime.resolve({ program: 'return 42', bindings: [] }))
+      expect(result.error).toBeUndefined()
+      expect(result.value).toBe(42)
     } finally {
       if (previous === undefined) delete process.env.TMPDIR
       else process.env.TMPDIR = previous
     }
   })
 
-  it('leaves no staging directory behind when a script copy fails', async () => {
-    // `mkdtempSync` succeeding and a later `copyFileSync` failing is its own
-    // case: the directory exists but is only partially populated. Recording it
-    // before the copies would leak it, because `run` retries staging on the next
-    // call and overwrites the single recorded path — teardown could then remove
-    // only the newest attempt. Staging must clean up its own partial directory.
-    //
-    // Only `copyFileSync` is stubbed, and only for the second script, so
-    // `mkdtempSync` really runs and the directory under assertion is real.
-    // The assertion checks the exact paths this test staged (see the sibling
-    // disposal-race test for why a global tmpdir diff races parallel workers).
-    const stagedBefore = stagedDirs.length
-    failNextCopyOf.value = 'protocol.py'
+  it.each(['protocol.py', 'bootstrap.py'])('reports missing packaged %s without launching a program', async (script) => {
+    failNextReadOf.value = script
     try {
       const { runtime } = await setup()
-      const result = await runtime.run(runtime.resolve({ program: 'return 1', bindings: [] }))
+      const result = await runtime.run(runtime.resolve({ program: 'return 42', bindings: [] }))
       expect(result.error?.kind).toBe('worker-exit')
-      expect(result.error?.message).toContain('failed to stage the python bootstrap')
-      // The partial directory is gone, so nothing accumulates across retries.
-      for (const dir of stagedDirs.slice(stagedBefore)) expect(existsSync(dir)).toBe(false)
+      expect(result.error?.message).toContain('failed to read the python bootstrap')
+      expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([])
+      expect(result.value).toBeUndefined()
     } finally {
-      failNextCopyOf.value = undefined
+      failNextReadOf.value = undefined
     }
-  }, 15_000)
+  })
 })
 
 describe('PythonPtcRuntime — process identity', () => {
@@ -1053,7 +973,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     expect(result.value).toEqual({ answer: 42 })
     // `print` in Python emits: text, ' ', text, '\n'. Concat the captured
     // fragments and assert the model-visible message survives.
-    expect(result.logs.join('')).toContain('hello 42')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('hello 42')
     // 15s: this is usually the suite's first real subprocess — a cold python3
     // start (interpreter + asyncio import) on a loaded CI runner can exceed
     // the 5s default alone; later tests reuse the warm page cache.
@@ -1075,7 +995,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toEqual({ tmpdir: tmpdir(), path: null, home: null, token: null })
-    expect(result.logs).toEqual([])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([])
   })
 
   it('bridges binding calls both ways and rejects the program-side call on a host rejection', async () => {
@@ -1340,17 +1260,42 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     expect(result.value).toBeUndefined()
   })
 
-  it('coalesces print arguments into one log line, not per-write fragments', async () => {
-    // print("a","b") calls write() per arg/sep/newline; the stream must emit
-    // one logical line "a b" so PTC mode's join(newline) does not insert
-    // spurious blank lines. Two prints → exactly two entries, no empties.
+  it.each([
+    ['print arguments', 'print("a", "b")', 'a b\n'],
+    ['raw writes', 'import sys; sys.stdout.write("a"); sys.stdout.write("b")', 'ab'],
+    ['native newlines', 'import os; os.write(1, b"one\\ntwo\\ntail")', 'one\ntwo\ntail'],
+    ['blank lines and trailing text', 'import sys; print(); print("a"); print(); sys.stdout.write("tail")', '\na\n\ntail'],
+  ])('preserves raw output from %s', async (_name, program, expected) => {
+    const { runtime } = await setup()
+    const result = await runtime.run(runtime.resolve({ program, bindings: [] }))
+    expect(result.error).toBeUndefined()
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toBe(expected)
+  })
+
+  it.each(['python', 'native'])('charges written newlines at the exact output cap for %s writes', async (channel) => {
+    const { runtime } = await setup({ maxLogBytes: 64 })
+    const program = (length: number): string => channel === 'python'
+      ? `print("a" * ${length})`
+      : `import os; os.write(1, b"a" * ${length} + b"\\n")`
+    const exact = await runtime.run(runtime.resolve({ program: program(58), bindings: [] }))
+    const text = exact.output.filter(block => block.type === 'text').map(block => block.text)
+    expect(exact.error).toBeUndefined()
+    expect(text).toEqual(['a'.repeat(58) + '\n'])
+    expect(Buffer.byteLength(JSON.stringify(text))).toBe(64)
+    const over = await runtime.run(runtime.resolve({ program: program(59), bindings: [] }))
+    expect(over.error).toBeUndefined()
+    expect(over.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(64)])
+  })
+
+  it('coalesces print arguments and retains each written newline', async () => {
+    // Per-argument writes coalesce without dropping the terminating newline.
     const { runtime } = await setup()
     const result = await runtime.run(runtime.resolve({
       program: ['print("a", "b")', 'print("c")', 'return None'].join('\n'),
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a b', 'c'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a b\n', 'c\n'])
   })
 
   it('flushes a print with no trailing newline', async () => {
@@ -1360,14 +1305,12 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['partial'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['partial'])
   })
 
   it('aggregates a large newline-free native write into one log entry, not one per pipe chunk', async () => {
     // A single `os.write` larger than one pipe read arrives as several Node
-    // `data` chunks. `logs` entries are joined with `\n` downstream, so pushing
-    // one entry per transport chunk would insert model-visible newlines at
-    // arbitrary pipe boundaries inside one native write. Stray capture holds a
+    // `data` chunks. Stray capture holds a
     // per-stream residual and admits only on a real `\n`, so a 200 KiB blast
     // with no newline reads back as exactly one entry with no interior breaks.
     const { runtime } = await setup({ maxLogBytes: 300_000 })
@@ -1377,7 +1320,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['A'.repeat(size)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['A'.repeat(size)])
   })
 
   it('splits native output on its own newlines, one entry per line', async () => {
@@ -1389,7 +1332,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['one', 'two', 'three'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['one\n', 'two\n', 'three'])
   })
 
   it('preserves each native stream order while allowing backend-dependent interleaving', async () => {
@@ -1406,8 +1349,8 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.indexOf('stdout-one')).toBeLessThan(result.logs.indexOf('stdout-two'))
-    expect(result.logs.indexOf('stderr-one')).toBeLessThan(result.logs.indexOf('stderr-two'))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).indexOf('stdout-one\n')).toBeLessThan(result.output.filter(block => block.type === 'text').map(block => block.text).indexOf('stdout-two\n'))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).indexOf('stderr-one\n')).toBeLessThan(result.output.filter(block => block.type === 'text').map(block => block.text).indexOf('stderr-two\n'))
   })
 
   it('bounds a newline-free native flood by the ledger instead of buffering it whole', async () => {
@@ -1423,9 +1366,9 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(4096))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(4096))
     // The retained output is bounded by the budget, not the 2 MB flood.
-    expect(result.logs.join('').length).toBeLessThan(4096)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('').length).toBeLessThan(4096)
   })
 
   it('bounds a newline-free single-character Python write drip by the fragment cap, not OOM', async () => {
@@ -1450,7 +1393,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(4096))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(4096))
   })
 
   it('bounds a control-char-dense native residual by serialized cost, not raw length', async () => {
@@ -1468,7 +1411,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(4096))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(4096))
   })
 
   it('rejects an output budget that could breach addressSpaceMb during encode at load', async () => {
@@ -1485,10 +1428,10 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     // (~16 MiB admissible), so a 50 MB cap is far over; the default caps against
     // 512 MiB are not. Both budgets are gated symmetrically — the value case sets
     // a default-fitting maxLogBytes so the maxValueBytes check is what fires.
-    const ctxLog = new Context()
+    const ctxLog = await createRuntimeContext()
     await expect(ctxLog.plugin(PythonPtcRuntime, { maxLogBytes: 50_000_000, addressSpaceMb: 256 }))
       .rejects.toThrow(/maxLogBytes times the 12x worst-case Unicode expansion must fit/)
-    const ctxValue = new Context()
+    const ctxValue = await createRuntimeContext()
     await expect(ctxValue.plugin(PythonPtcRuntime, { maxValueBytes: 50_000_000, addressSpaceMb: 256 }))
       .rejects.toThrow(/maxValueBytes times the 12x worst-case Unicode expansion must fit/)
     // Discriminates 12 from 8: a 48 MiB maxLogBytes against a 512 MiB address
@@ -1498,21 +1441,21 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     // string, the line slice, and the encode copy live at once. The settlement
     // flush is no longer the binding case: `flush_line` drops the pending chunks
     // before its push, so it holds two copies, not three.
-    const ctxTwelve = new Context()
+    const ctxTwelve = await createRuntimeContext()
     await expect(ctxTwelve.plugin(PythonPtcRuntime, { maxLogBytes: 48 * 1024 * 1024, addressSpaceMb: 512 }))
       .rejects.toThrow(/maxLogBytes times the 12x worst-case Unicode expansion must fit/)
     // An addressSpaceMb at or below the interpreter baseline leaves nothing
     // budgetable, so no budget value can pass. It is rejected on its own terms:
     // the budget loop would otherwise report "a limit of -1" (or -2796203 at
     // 32 MiB) while naming maxLogBytes, sending the operator to the wrong knob.
-    const ctxBaseline = new Context()
+    const ctxBaseline = await createRuntimeContext()
     await expect(ctxBaseline.plugin(PythonPtcRuntime, { addressSpaceMb: 64 }))
       .rejects.toThrow(/addressSpaceMb must exceed the 67108864-byte interpreter baseline/)
-    const ctxBelow = new Context()
+    const ctxBelow = await createRuntimeContext()
     await expect(ctxBelow.plugin(PythonPtcRuntime, { addressSpaceMb: 32 }))
       .rejects.toThrow(/addressSpaceMb must exceed the 67108864-byte interpreter baseline/)
     // The default caps against the default 512 MiB address space load.
-    const ok = new Context()
+    const ok = await createRuntimeContext()
     const fiber = await ok.plugin(PythonPtcRuntime, { maxLogBytes: 65536, maxValueBytes: 32768, addressSpaceMb: 512 })
     await fiber.dispose()
   })
@@ -1541,7 +1484,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(4096))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(4096))
   })
 
   it('drops a second stray line in the same chunk once the first truncated the ledger', async () => {
@@ -1560,8 +1503,8 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(64))
-    expect(result.logs.join('\n')).not.toContain('SECOND')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(64))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).not.toContain('SECOND')
   })
 
   it('charges a broken multibyte sequence its U+FFFD bytes, split across pipe chunks', async () => {
@@ -1583,8 +1526,8 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.join('')).toContain('A')
-    expect(result.logs.join('')).toContain('�')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('A')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('�')
   })
 
   it('charges the exact serialized cost of short-escape and quote/backslash characters', async () => {
@@ -1600,7 +1543,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['\ta"b\\c\x01é'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['\ta"b\\c\x01é\n'])
   })
 
   it('fails a completion dict with a non-string key as invalid-output (no key coercion)', async () => {
@@ -2131,11 +2074,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
   }, 90_000)
 
   it('appends a flushed unterminated line to the next entry without a fake newline', async () => {
-    // An explicit flush of an unterminated line (print(..., end='', flush=True))
-    // used to push a full log frame, so the following print() landed in a
-    // SECOND entry and logs.join('\n') rendered 'a\nb' for what the program
-    // printed as one line. The flush frame now carries `open: true` and the
-    // host appends the next frame to the same entry.
+    // Explicitly flushed text and the closing newline share one billed entry.
     const { runtime } = await setup()
     const result = await runtime.run(runtime.resolve({
       program: [
@@ -2146,7 +2085,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['ab'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['ab\n'])
   }, 15_000)
 
   it('keeps a SEALED open hold when the run ends with it still open', async () => {
@@ -2165,7 +2104,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['x' + 'a'.repeat(3000)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['x' + 'a'.repeat(3000)])
   }, 15_000)
 
   it('keeps a flushed unterminated line when the run ends with it still open', async () => {
@@ -2181,7 +2120,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['committed'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['committed'])
   }, 15_000)
 
   it('skips the hold for a zero-content open continuation', async () => {
@@ -2201,7 +2140,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['xy'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['xy'])
   }, 15_000)
 
   it('seals the open hold past MAX_PENDING_CHUNKS without changing the merged entry', async () => {
@@ -2223,7 +2162,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['x' + 'a'.repeat(3000) + 'y'])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['x' + 'a'.repeat(3000) + 'y'])
   }, 15_000)
 
   it('bounds a forged open-frame flood against the log budget', async () => {
@@ -2243,7 +2182,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a'.repeat(60), logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a'.repeat(60), logTruncationMarker(64)])
   }, 15_000)
 
   it('commits a sealed open hold before the truncation marker', async () => {
@@ -2267,8 +2206,8 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs[0]).toBe('x' + 'a'.repeat(3000))
-    expect(result.logs[result.logs.length - 1]).toBe(logTruncationMarker(65536))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)[0]).toBe('x' + 'a'.repeat(3000))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)[result.output.filter(block => block.type === 'text').map(block => block.text).length - 1]).toBe(logTruncationMarker(65536))
   }, 15_000)
 
   it('commits a flushed open prefix before the truncation marker', async () => {
@@ -2285,7 +2224,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['committed', logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['committed', logTruncationMarker(64)])
   }, 15_000)
 
   it('drops a forged fd-3 frame with illegal UTF-8 instead of accepting a mangled value', async () => {
@@ -2322,14 +2261,14 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a'.repeat(60), logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a'.repeat(60), logTruncationMarker(64)])
   }, 15_000)
 
   it('bills a merged open entry once, not per fragment', async () => {
     // A merged entry's wire cost is billed ONCE, split across its fragments
     // (first fragment pays quotes+separator, continuations pay only content).
     // Under maxLogBytes: 64, 16 single-character flushes merge to one 16-char
-    // entry (2 quotes + 16 content + 1 separator = 19), which fits; per-
+    // entry (2 quotes + 16 content + 2 escaped newline + 1 separator = 21), which fits; per-
     // fragment billing (each charged quotes+separator, ~4 bytes) would truncate
     // at 16 x 4 = 64.
     const { runtime } = await setup({ maxLogBytes: 64 })
@@ -2343,15 +2282,11 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['x'.repeat(16)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['x'.repeat(16) + '\n'])
   }, 15_000)
 
   it('admits a compliant merged entry whose closing frame fits the remaining budget', async () => {
-    // The review's arithmetic check: print('a'*30, flush); print('b'*25) under
-    // maxLogBytes: 64 has a merged wire cost of 2 quotes + 55 content + 1
-    // separator = 58 <= 63, so it MUST be admitted as one entry. The earlier
-    // cap math (logBudget - openCost) made the closing frame's walk see a
-    // negative cap and truncate a compliant entry.
+    // The merged text and newline cost 60 bytes against the 63-byte ledger.
     const { runtime } = await setup({ maxLogBytes: 64 })
     const result = await runtime.run(runtime.resolve({
       program: [
@@ -2362,7 +2297,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a'.repeat(30) + 'b'.repeat(25)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a'.repeat(30) + 'b'.repeat(25) + '\n'])
   }, 15_000)
 
   it('rejects an open frame that would overflow the ledger by one byte', async () => {
@@ -2382,50 +2317,41 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual([logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(64)])
   }, 15_000)
 
   it('bills the closing frame as the merged tail under an exact-fit budget', async () => {
-    // The child's split billing: a 30-char open + a 30-char closing frame cost
-    // 2 + 60 + 1 = 63 = ledger 63 exactly; the closing frame must be billed as
-    // the merged tail (content only), not as a fresh entry (which would
-    // double-charge the quotes+separator and truncate an exact-fit entry).
+    // The merged entry costs two quotes, 58 characters, the escaped
+    // newline, and one separator: 63 bytes against the 63-byte ledger.
     const { runtime } = await setup({ maxLogBytes: 64 })
     const result = await runtime.run(runtime.resolve({
       program: [
         "print('a' * 30, end='', flush=True)",
-        "print('b' * 30)",
+        "print('b' * 28)",
         'return "done"',
       ].join('\n'),
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a'.repeat(30) + 'b'.repeat(30)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a'.repeat(30) + 'b'.repeat(28) + '\n'])
   }, 15_000)
 
   it('does not over-reject an exact-fit closing line while an open entry accumulates', async () => {
-    // The write-path pre-check's cheap bound used +3 (quotes + separator) even
-    // while an open entry was accumulating, so an exact-fit merged TAIL was
-    // truncated. The recipe below goes through the SCAN pre-check (the
-    // newline-terminated write arrives with an empty pending buffer, so the
-    // buffered-chunks branch is skipped): 'a'*29 flush bills 32 (ledger 31
-    // left), then one write of 'b'*30 + newline merges 30 more chars whose
-    // cheap bound is 30, not 33 — the +3 form saw 30 + 3 = 33 > 31, sliced to
-    // a budget prefix, and pushed past the ledger, emitting the marker for a
-    // line that fits (merged cost 2 + 59 + 1 = 62 <= 63).
+    // A closing tail pays its content and escaped newline; the first
+    // fragment already paid the quotes and separator.
     const { runtime } = await setup({ maxLogBytes: 64 })
     const result = await runtime.run(runtime.resolve({
       program: [
         'import sys',
         "sys.stdout.write('a' * 29)",
         'sys.stdout.flush()',
-        "sys.stdout.write('b' * 30 + chr(10))",
+        "sys.stdout.write('b' * 29 + chr(10))",
         'return "done"',
       ].join('\n'),
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a'.repeat(29) + 'b'.repeat(30)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a'.repeat(29) + 'b'.repeat(29) + '\n'])
   }, 15_000)
 
 
@@ -2445,7 +2371,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['a'.repeat(59), logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['a'.repeat(59), logTruncationMarker(64)])
   }, 15_000)
 
   it('truncates when the closing frame of a merged entry overflows the budget', async () => {
@@ -2463,7 +2389,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs).toEqual(['x'.repeat(40), logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['x'.repeat(40), logTruncationMarker(64)])
   }, 15_000)
 
   it('keeps a float completion exact when the program mutates the decimal context', async () => {
@@ -2568,8 +2494,8 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('ok')
-    expect(result.logs).toContain('first')
-    expect(result.logs).toContain('second')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('first')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('second')
   })
 
   it('raises the declared errorClass with the member name on rejection', async () => {
@@ -2750,7 +2676,7 @@ describe('PythonPtcRuntime — programs and bindings', () => {
     // empty or NUL pythonBin) rather than silently falling to execvp's
     // platform default PATH and starting a system interpreter the caller never
     // asked for.
-    const ctx = new Context()
+    const ctx = await createRuntimeContext()
     await expect(ctx.plugin(PythonPtcRuntime, { pythonBin: 'definitely-no-such-python-xyz' }))
       .rejects.toThrow(/does not resolve on PATH/)
   })
@@ -3554,7 +3480,7 @@ describe('PythonPtcRuntime — budgets, termination, disposal', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('escaped')
-    expect(result.logs).toContain('leader-diagnostic-no-newline')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('leader-diagnostic-no-newline')
   }, 8000)
 
   it('closes the child stdin so a program read sees EOF instead of blocking', async () => {
@@ -3950,7 +3876,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    const markers = result.logs.filter(line => line.includes('log capture truncated at 128 bytes'))
+    const markers = result.output.filter(block => block.type === 'text').map(block => block.text).filter(line => line.includes('log capture truncated at 128 bytes'))
     expect(markers.length).toBeGreaterThanOrEqual(1)
   })
 
@@ -4527,7 +4453,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs.some(line => line.includes('log capture truncated'))).toBe(true)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('log capture truncated'))).toBe(true)
   }, 20_000)
 
   it('stops host capture at the child ledger truncation, keeping exactly one marker', async () => {
@@ -4554,11 +4480,11 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    const markers = result.logs.filter(line => line.includes('log capture truncated'))
+    const markers = result.output.filter(block => block.type === 'text').map(block => block.text).filter(line => line.includes('log capture truncated'))
     expect(markers).toHaveLength(1)
     // The marker is the LAST entry: nothing was retained after truncation.
-    expect(result.logs.at(-1)).toBe(markers[0])
-    expect(result.logs.join('\n')).not.toContain('AFTER')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(markers[0])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).not.toContain('AFTER')
   }, 20_000)
 
   it('keeps one marker when a program forges repeated truncation frames', async () => {
@@ -4581,13 +4507,13 @@ describe('PythonPtcRuntime — hostile peer', () => {
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
     // The non-boolean flag did not truncate, so its text was captured normally.
-    expect(result.logs).toContain('first')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('first')
     // The first genuine flag stopped capture and emitted the HOST's own marker;
     // the frame's own text is discarded, so neither payload appears.
-    expect(result.logs).not.toContain('MARK-A')
-    expect(result.logs).not.toContain('MARK-B')
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(4096))
-    expect(result.logs.filter(line => line.includes('log capture truncated'))).toHaveLength(1)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).not.toContain('MARK-A')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).not.toContain('MARK-B')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(4096))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).filter(line => line.includes('log capture truncated'))).toHaveLength(1)
   }, 20_000)
 
   it('discards the text of a forged truncation frame instead of retaining it', async () => {
@@ -4611,8 +4537,8 @@ describe('PythonPtcRuntime — hostile peer', () => {
     expect(result.value).toBe('done')
     // Only the host marker is kept, so the total stays orders of magnitude below
     // what the forgery carried — and below the cap it was trying to escape.
-    expect(result.logs).toEqual([logTruncationMarker(64)])
-    expect(result.logs.join('').length).toBeLessThan(forgedBytes / 1000)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('').length).toBeLessThan(forgedBytes / 1000)
   }, 30_000)
 
   it('coalesces unframed fd-3 fragments without recopying the sealed prefix', async () => {
@@ -4668,7 +4594,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toContain('after-trickle')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('after-trickle\n')
     // Sealing appends a finished block rather than re-merging everything held, so
     // each byte is copied once. Re-concatenating the whole buffer at every
     // threshold made the cumulative copy volume quadratic — 10 MiB trickled a
@@ -4735,9 +4661,9 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs.some(line => line.includes('log capture truncated'))).toBe(true)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('log capture truncated'))).toBe(true)
     // The retained text is bounded by the budget, not the 1 MB the program wrote.
-    expect(result.logs.join('\n').length).toBeLessThan(4096)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('').length).toBeLessThan(4096)
   }, 20_000)
 
   it('discards empty writes instead of buffering one list slot each', async () => {
@@ -4760,7 +4686,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toEqual([])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([])
   }, 30_000)
 
   it('stops scanning a single-write newline flood once the log ledger truncates', async () => {
@@ -4776,7 +4702,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs.filter(line => line.includes('log capture truncated'))).toHaveLength(1)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).filter(line => line.includes('log capture truncated'))).toHaveLength(1)
     expect(Date.now() - start).toBeLessThan(8_000)
   }, 15_000)
 
@@ -4803,7 +4729,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toEqual([logTruncationMarker(256)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(256)])
   }, 40_000)
 
   it('bounds a newline-free write against the already-buffered chunks before joining them', async () => {
@@ -4834,7 +4760,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toEqual([logTruncationMarker(256)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(256)])
   }, 40_000)
 
   it('bounds a newline-terminated write against the already-buffered chunks before joining them', async () => {
@@ -4861,7 +4787,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toEqual([logTruncationMarker(256)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(256)])
   }, 40_000)
 
   it('emits pending text on an explicit flush, before the run can be killed', async () => {
@@ -4881,59 +4807,39 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error?.kind).toBe('timeout')
-    expect(result.logs).toContain('before hang')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('before hang')
   }, 15_000)
 
   it('marks a dropped tail when the ledger lands on exactly zero remaining', async () => {
-    // One 100-character line costs 103 serialized bytes (quotes + separator),
-    // consuming a 104-byte budget minus the 1-byte array-envelope reservation
-    // (104 - 1 = 103) EXACTLY. Landing on zero never trips
-    // LogBuffer's "cost > remaining" branch, so `_truncated` stays unset and the
-    // stream's own `remaining > 0` guard silently discarded the unscanned tail —
-    // the run reported a complete log while dropping text. The tail must be
-    // pushed so the marker is emitted. (This surfaced only after empty writes
-    // stopped being buffered: `print` issues a trailing `write("")` whose
-    // buffered-empty path used to force the marker out incidentally.) A single
-    // wide line is used rather than many narrow ones so the CHILD ledger is the
-    // one that lands on zero: the host's identical ledger truncates first when
-    // many small entries precede the long marker text. `["y"*100]` serializes to
-    // exactly 104 bytes (103 payload + 1 envelope), so 104 is the smallest
-    // budget that admits the entry.
-    const { runtime } = await setup({ maxLogBytes: 104, maxWallMs: 10_000 })
+    // A 100-character line plus its escaped newline consumes a 106-byte
+    // serialized array exactly; an unscanned tail must still report truncation.
+    const { runtime } = await setup({ maxLogBytes: 106, maxWallMs: 10_000 })
     const result = await runtime.run(runtime.resolve({
       program: ['print("y" * 100 + "\\n" + "z" * 10, end="")', 'return "done"'].join('\n'),
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toContain('y'.repeat(100))
-    expect(result.logs.filter(line => line.includes('log capture truncated'))).toHaveLength(1)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('y'.repeat(100) + '\n')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).filter(line => line.includes('log capture truncated'))).toHaveLength(1)
     // The dropped tail is not retained, but its loss is now reported.
-    expect(result.logs.some(line => line.includes('z'))).toBe(false)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('z'))).toBe(false)
   }, 15_000)
 
   it('keeps an admitted log within the serialized array envelope at the exact limit', async () => {
-    // Each entry is charged its JSON-string cost plus one separator byte, and
-    // the serialized outer logs array adds one more byte of envelope (two
-    // brackets and n-1 commas). The ledgers reserve that byte, so a result that
-    // exactly exhausts the ledger still serializes within the configured cap.
-    // At the 64-byte floor (the smallest admissible maxLogBytes): ledger 63,
-    // a 60-character line serializes as `"aaa...a"` (62 bytes) + 1 separator
-    // = 63, exactly exhausting the ledger and serializing as `["aaa...a"]`
-    // = 64 = the cap; a 61-character line costs 64 > 63 and truncates. The
-    // marker rides envelope, so the serialized logs run to cap + marker.
+    // At the 64-byte floor, 58 characters and their escaped newline
+    // serialize to exactly 64 bytes including the array envelope.
     const { runtime } = await setup({ maxLogBytes: 64, maxWallMs: 10_000 })
     const result = await runtime.run(runtime.resolve({
-      program: ['print("a" * 60 + "\\n" + "b" * 61, end="")', 'return "done"'].join('\n'),
+      program: ['print("a" * 58 + "\\n" + "b" * 61, end="")', 'return "done"'].join('\n'),
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    // The 60-character line was admitted; the 61-character line was not (a
-    // single 'b' would also match the marker's "bytes", so check for the line).
-    expect(result.logs).toContain('a'.repeat(60))
-    expect(result.logs.some(line => line.includes('b'.repeat(61)))).toBe(false)
-    expect(result.logs.some(line => line.includes('log capture truncated'))).toBe(true)
+    // Only the first complete line fits before the marker.
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('a'.repeat(58) + '\n')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('b'.repeat(61)))).toBe(false)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('log capture truncated'))).toBe(true)
   }, 15_000)
 
   it('rejects a log budget too small to serialize the truncation marker', async () => {
@@ -4958,10 +4864,10 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.some(line => line.includes('log capture truncated'))).toBe(true)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('log capture truncated'))).toBe(true)
     // Serialized (escaped) size of retained entries stays in the budget's
     // neighborhood: well under the ~30 kB an uncharged flood would retain.
-    const serialized = Buffer.byteLength(JSON.stringify(result.logs), 'utf8')
+    const serialized = Buffer.byteLength(JSON.stringify(result.output.filter(block => block.type === 'text').map(block => block.text)), 'utf8')
     expect(serialized).toBeLessThan(1024)
   })
 
@@ -4984,9 +4890,9 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs.filter(line => line.includes('log capture truncated'))).toHaveLength(1)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).filter(line => line.includes('log capture truncated'))).toHaveLength(1)
     // Nothing of the line itself was retained: the ledger refused the whole entry.
-    expect(result.logs.every(line => !line.includes(String.fromCharCode(0)))).toBe(true)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).every(line => !line.includes(String.fromCharCode(0)))).toBe(true)
   }, 30_000)
 
   it('bounds a huge unterminated tail after an early newline without copying it whole', async () => {
@@ -5014,7 +4920,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs.some(line => line.includes('log capture truncated'))).toBe(true)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('log capture truncated'))).toBe(true)
   }, 30_000)
 
   it('flushes logs before framing the value so their peaks do not add against RLIMIT_AS', async () => {
@@ -5449,8 +5355,8 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.length).toBeLessThanOrEqual(65)
-    expect(result.logs.some(line => line.includes('log capture truncated'))).toBe(true)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).length).toBeLessThanOrEqual(65)
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).some(line => line.includes('log capture truncated'))).toBe(true)
   })
 
   it('reassembles multibyte UTF-8 split across stray-output pipe chunks', async () => {
@@ -5480,7 +5386,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    const text = result.logs.join('')
+    const text = result.output.filter(block => block.type === 'text').map(block => block.text).join('')
     expect(text).toContain('\u0900\u4f60\u597d\u{1f600}\u{10ffff}')
     expect(text).not.toContain('\ufffd')
   })
@@ -5502,7 +5408,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.join('')).toContain('�')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('�')
   })
 
   it('rejects reserved words of EITHER backend language as binding globals', async () => {
@@ -5533,8 +5439,8 @@ describe('PythonPtcRuntime — hostile peer', () => {
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.join('')).toContain('stray stdout')
-    expect(result.logs.join('')).toContain('stray stderr')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('stray stdout')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('stray stderr')
   })
 
   it('flushes bytes written through sys.__stdout__/sys.__stderr__ before the done frame', async () => {
@@ -5564,8 +5470,8 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs.join('')).toContain('orig stdout')
-    expect(result.logs.join('')).toContain('orig stderr')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('orig stdout')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('orig stderr')
   }, 15_000)
 
   it('escalates to SIGKILL when the program traps SIGTERM and ignores the grace period', async () => {
@@ -5658,7 +5564,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('settled')
     // The frame was dropped as one truncation marker, not retained.
-    expect(result.logs).toEqual([logTruncationMarker(128)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(128)])
     // The escaped copy (~144 MiB) was never materialized.
     expect(process.memoryUsage().heapUsed - before).toBeLessThan(256 * 1024 * 1024)
   }, 90_000)
@@ -5679,7 +5585,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('settled')
-    expect(result.logs).toEqual([logTruncationMarker(64)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual([logTruncationMarker(64)])
   }, 8000)
 
   it('caps a forged done error.message from its code-unit prefix, never encoding the whole message', async () => {
@@ -5916,7 +5822,7 @@ describe('PythonPtcRuntime — hostile peer', () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toContain('after-cap-frames')
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toContain('after-cap-frames')
   }, 120_000)
 
   it('rejects an oversized first frame that lands on the sealing threshold with a newline', async () => {

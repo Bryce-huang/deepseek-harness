@@ -10,6 +10,7 @@ import {
   ConversationLocationIndex,
   ConversationNodeAssembler as RuntimeConversationNodeAssembler,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { ConversationUpdateError } from '../src/client/conversation/assembler.ts'
 import type {
   ConversationMatch, ConversationNodeContext,
   ConversationNodeDefinition, ConversationViewDefinition, ConversationViewNode,
@@ -1809,7 +1810,113 @@ describe('ConversationNodeAssembler', () => {
     expect(testSnapshot(assembler)?.order).toEqual([])
   })
 
-  it('rejects withdrawing a previously materialized Node during an incremental update', () => {
+  describe('exclusive matches', () => {
+    const run = (seq: number, name: string) =>
+      input(at(SessionSeq(seq), 'command/run', { commandId: `c${String(seq)}`, name }))
+    const commandName = (event: SessionEventLike): string | undefined => (event.type as string) === 'command/run'
+      ? (event.data as { readonly name: string }).name
+      : undefined
+
+    function genericDefinition(start = vi.fn(() => 'generic'), target = 'test'): ConversationNodeDefinition<string> {
+      return {
+        kind: `generic-${target}`,
+        target,
+        match: event => commandName(event) === undefined ? null : { id: String(event.seq), role: 'start' },
+        start,
+        update: context => context.state,
+        buildViewNode: context => target === 'test' ? node(context, context.state) : null,
+      }
+    }
+
+    // `null` builds a Definition without a target; an omitted argument keeps the test target.
+    function claimingDefinition(kind = 'specific', target: string | null = 'test'): ConversationNodeDefinition<string> {
+      return {
+        kind,
+        ...target === null ? {} : { target },
+        match: event => commandName(event) === 'claimed'
+          ? { id: String(event.seq), role: 'start', exclusive: true }
+          : null,
+        start: () => kind,
+        update: context => context.state,
+        ...target === null ? {} : { buildViewNode: (context: ConversationNodeContext<string>) => node(context, context.state) },
+      }
+    }
+
+    function nodeData(assembler: ConversationNodeAssembler): unknown[] {
+      return [...testSnapshot(assembler)?.nodes.values() ?? []].map(value => value.data)
+    }
+
+    it.each(['claim first', 'claim last'] as const)(
+      'withholds the claimed event from other Definitions of the target when registered %s',
+      (order) => {
+        const genericStart = vi.fn(() => 'generic')
+        const definitions = [claimingDefinition(), genericDefinition(genericStart)]
+        const assembler = new ConversationNodeAssembler(
+          new TestEventDefinitions(order === 'claim first' ? definitions : [...definitions].reverse()),
+          new TestViewDefinitions([testView()]),
+        )
+
+        assembler.replaceWindow([run(1, 'claimed'), run(2, 'other')], false)
+        assembler.flush()
+        assembler.append(run(3, 'claimed'))
+        assembler.flush()
+
+        expect(genericStart).toHaveBeenCalledOnce()
+        expect(nodeData(assembler)).toEqual(['specific', 'generic', 'specific'])
+      },
+    )
+
+    it('keeps delivering the claimed event to other targets, target-less Definitions, and no fallback', () => {
+      const otherTargetStart = vi.fn(() => 'generic')
+      const stateOnlyStart = vi.fn(() => null)
+      const stateOnly: ConversationNodeDefinition<null> = {
+        kind: 'state-only',
+        match: event => commandName(event) === undefined ? null : { id: String(event.seq), role: 'start' },
+        start: stateOnlyStart,
+        update: context => context.state,
+      }
+      const fallbackStart = vi.fn(() => 'fallback')
+      const assembler = new ConversationNodeAssembler(
+        new TestEventDefinitions(
+          [claimingDefinition(), genericDefinition(otherTargetStart, 'trajectory'), stateOnly],
+          fallbackDefinition(fallbackStart),
+        ),
+        new TestViewDefinitions([testView()]),
+      )
+
+      assembler.replaceWindow([run(1, 'claimed')], false)
+      assembler.flush()
+
+      expect(otherTargetStart).toHaveBeenCalledOnce()
+      expect(stateOnlyStart).toHaveBeenCalledOnce()
+      expect(fallbackStart).not.toHaveBeenCalled()
+      expect(nodeData(assembler)).toEqual(['specific'])
+    })
+
+    it('rejects two claims on one target', () => {
+      const assembler = new ConversationNodeAssembler(
+        new TestEventDefinitions([claimingDefinition('first'), claimingDefinition('second')]),
+        new TestViewDefinitions([testView()]),
+      )
+
+      expect(() => assembler.replaceWindow([run(1, 'claimed')], false)).toThrow(
+        'conversation Definitions "first" and "second" both claim command/run at seq 1 on target "test"',
+      )
+    })
+
+    it('rejects a claim from a Definition without a target', () => {
+      const assembler = new ConversationNodeAssembler(
+        new TestEventDefinitions([claimingDefinition('untargeted', null)]),
+        new TestViewDefinitions([testView()]),
+      )
+
+      expect(() => assembler.replaceWindow([run(1, 'claimed')], false)).toThrow(
+        'conversation Definition "untargeted" claims command/run at seq 1 without a target',
+      )
+    })
+  })
+
+  it('rejects withdrawing a previously materialized Node and replaces the view with a complete rebuild', () => {
     const definition: ConversationNodeDefinition<boolean> = {
       kind: 'toggle',
       match: (event) => {
@@ -1831,9 +1938,65 @@ describe('ConversationNodeAssembler', () => {
     expect(testSnapshot(assembler)?.order).toHaveLength(1)
 
     assembler.append(input(at(SessionSeq(2), 'toggle/hide', {})))
-    expect(() => assembler.flush()).toThrow(/withdrew materialized target "test"/)
+    let failure: unknown
+    try {
+      assembler.flush()
+    } catch (error: unknown) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(ConversationUpdateError)
+    expect((failure as ConversationUpdateError).rebuilt).toBe(true)
+    expect(((failure as ConversationUpdateError).cause as Error).message).toMatch(/withdrew materialized target "test"/)
+    // The rebuild replayed the window, so the view already reflects the hidden toggle.
+    expect(testSnapshot(assembler)?.order).toHaveLength(0)
+    assembler.append(input(at(SessionSeq(3), 'command/run', { commandId: 'two', name: 'x' })))
+    expect(() => assembler.flush()).not.toThrow()
+  })
 
+  it('reports both failures when the rebuild fails and retries the rebuild on the next flush', () => {
+    let starts = 0
+    const definition: ConversationNodeDefinition<boolean> = {
+      kind: 'toggle',
+      match: (event) => {
+        if ((event.type as string) === 'command/run') return { id: 'one', role: 'start' }
+        if ((event.type as string) === 'toggle/hide') return { id: 'one', role: 'update' }
+        return null
+      },
+      start: () => {
+        starts++
+        if (starts === 2) throw new Error('replay start failed')
+        return true
+      },
+      update: () => false,
+      target: 'test',
+      buildViewNode: context => context.state === true ? node(context, true) : null,
+    }
+    const assembler = new ConversationNodeAssembler(
+      new TestEventDefinitions([definition]),
+      new TestViewDefinitions([testView()]),
+    )
+    assembler.replaceWindow([input(at(SessionSeq(1), 'command/run', { commandId: 'one', name: 'x' }))], false)
+    assembler.flush()
+    assembler.append(input(at(SessionSeq(2), 'toggle/hide', {})))
+
+    let failure: unknown
+    try {
+      assembler.flush()
+    } catch (error: unknown) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(ConversationUpdateError)
+    expect((failure as ConversationUpdateError).rebuilt).toBe(false)
+    const cause = (failure as ConversationUpdateError).cause
+    expect(cause).toBeInstanceOf(AggregateError)
+    expect((cause as AggregateError).errors.map(error => (error as Error).message)).toEqual([
+      expect.stringMatching(/withdrew materialized target "test"/),
+      'replay start failed',
+    ])
+    // The failed rebuild published no view; the next flush rebuilds before any other work.
     expect(testSnapshot(assembler)?.order).toHaveLength(1)
+    expect(assembler.flush()).toBe(true)
+    expect(testSnapshot(assembler)?.order).toHaveLength(0)
   })
 
   it('fails loud when a Definition returns undefined State', () => {

@@ -1,4 +1,4 @@
-import { Context } from '@deepseek-ai/cordis'
+import { createRuntimeContext } from './setup.ts'
 import { expect, it, vi } from 'vitest'
 import { logTruncationMarker } from '../src/protocol.ts'
 
@@ -28,7 +28,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 const { PythonPtcRuntime } = await import('../src/index.ts')
 
 it('seals stray fragments without recopying the sealed prefix', async () => {
-  const ctx = new Context()
+  const ctx = await createRuntimeContext()
   const fiber = await ctx.plugin(PythonPtcRuntime, { maxLogBytes: 200_000, maxWallMs: 30_000 })
   const realConcat = Buffer.concat.bind(Buffer)
   let copied = 0
@@ -45,7 +45,7 @@ it('seals stray fragments without recopying the sealed prefix', async () => {
     }))
     expect(result.error).toBeUndefined()
     expect(result.value).toBe('done')
-    expect(result.logs).toEqual(['x'.repeat(60_000)])
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text)).toEqual(['x'.repeat(60_000) + '\n'])
     // Sealing copies each byte at most twice; merging every accumulated prefix
     // instead copies over a megabyte for these 60,001 controlled fragments.
     expect(maxFragments).toBeLessThanOrEqual(1024)
@@ -60,7 +60,7 @@ it.each([
   { name: 'illegal UTF-8 bytes', payload: 'b"\\xff" * 3200' },
   { name: 'CESU-8 lone surrogates', payload: 'b"\\xed\\xa0\\x80" * 1100' },
 ])('bounds $name by their U+FFFD-decoded cost', async ({ payload }) => {
-  const ctx = new Context()
+  const ctx = await createRuntimeContext()
   const fiber = await ctx.plugin(PythonPtcRuntime, { maxLogBytes: 3072, maxWallMs: 30_000 })
   const realConcat = Buffer.concat.bind(Buffer)
   let maxConcat = 0
@@ -75,7 +75,7 @@ it.each([
       bindings: [],
     }))
     expect(result.error).toBeUndefined()
-    expect(result.logs.at(-1)).toBe(logTruncationMarker(3072))
+    expect(result.output.filter(block => block.type === 'text').map(block => block.text).at(-1)).toBe(logTruncationMarker(3072))
     // Each raw byte decodes to U+FFFD (three UTF-8 bytes), so a 3072-byte
     // budget flushes near 1024 raw bytes. Charging raw or structural widths
     // instead retains over 2048 bytes before flushing these payloads.

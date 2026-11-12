@@ -1,7 +1,7 @@
 /** Shared configuration forms and their Host describe mirror. */
 import type { Context } from '@deepseek-ai/cordis'
-// Type-only: the ctx.remote merge, the fixed Host facts, and the carrier's
-// `connection/reset` lifecycle event, all through the assembly package.
+// Type-only: the ctx.remote merge and the carrier's `connection/reset`
+// lifecycle event, all through the assembly package.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only pair supplying `$on` and its key face without dragging a build
 // artifact into the Host graph (rationale beside the same pair in
@@ -14,7 +14,7 @@ import { SettingsDescribeMirror } from './settings-mirror.ts'
 
 export type {
   SettingsLauncherOwnerProps, SettingsGeneralItemOwnerProps, SettingsHeaderOwnerProps, SettingsOnboardingOwnerProps,
-  SettingsPluginsTabOwnerProps, SettingsSectionOwnerProps, SettingsTriggerOwnerProps,
+  SettingsPluginsTabOwnerProps, SettingsSectionIconOwnerProps, SettingsSectionOwnerProps, SettingsTriggerOwnerProps,
 } from './contract/slots.ts'
 export type { ConfigForms } from './config-form.ts'
 export type { ConfigForm, ConfigFormSnapshot } from './config-form-types.ts'
@@ -60,5 +60,5 @@ export function apply(ctx: Context): void {
     void mirror.ensure()
     return () => { for (const dispose of disposers) dispose() }
   }, 'ui-settings: describe mirror invalidations')
-  new ConfigForms(ctx, { mirror, schema, persistence })
+  new ConfigForms(ctx, { mirror, schema })
 }

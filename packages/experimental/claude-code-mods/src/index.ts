@@ -10,7 +10,8 @@
  * @module @deepseek-ai/dsh-experimental-claude-code-mods
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import { FiberState, type Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-working-directory'
 import z from '@deepseek-ai/schemastery'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -207,9 +208,8 @@ export class ClaudeCodeMods extends TypertRemoteService {
     bandRows: z.number().default(10),
   })
 
-  // Every harness service is read through `ctx.get` when a mod's call needs it,
-  // so a deployment composes only what its mods use.
-  static inject: string[] = []
+  // Session initialization requires its directory and turn-boundary reader; other services are read on demand.
+  static inject = ['workingDirectory', 'agents']
 
   private readonly engine: ModsEngine<AgentBinding>
   private readonly registrations = new Map<string, Set<() => void>>()
@@ -274,6 +274,10 @@ export class ClaudeCodeMods extends TypertRemoteService {
     })
     this.engine = engine
     const registrations = this.registrations
+    // Dependent mod disposers join timer callbacks before this provider's cleanup runs.
+    ctx.on('internal/status', (fiber) => {
+      if (fiber === ctx.fiber && fiber.state === FiberState.UNLOADING) detached.cancel()
+    })
     ctx.effect(() => async () => {
       // Cancel first: a timer callback waiting inside a `$` call ends on this signal, and engine.dispose awaits it.
       detached.cancel()
@@ -287,7 +291,7 @@ export class ClaudeCodeMods extends TypertRemoteService {
     // Read at each use: the registry may mount after this plugin in a composition.
     const isRoot = (agent: Agent): boolean => {
       const agents = ctx.get('agents')
-      return agents === undefined || agents.roots().includes(agent)
+      return agent.session.header.origin !== 'subagent' && (agents === undefined || agents.get(agent.id) === agent)
     }
     /** Root agents that received `session.start`; the registry no longer lists an agent once it is disposed. */
     const startedRoots = new Set<string>()
@@ -304,14 +308,14 @@ export class ClaudeCodeMods extends TypertRemoteService {
     ctx.on('agent/created', async ({ agent, signal }) => {
       if (!isRoot(agent)) return
       startedRoots.add(agent.session.id)
+      // Cancelling creation also cancels directory validation and a waiting hook.
+      /* v8 ignore next -- the loop always supplies an initialization signal; the payload type keeps it optional */
+      const abandon = signal === undefined ? detached.controller.signal : AbortSignal.any([signal, detached.controller.signal])
       const input: SessionStartInput = {
-        cwd: agent.session.header.cwd ?? process.cwd(),
+        cwd: await ctx.workingDirectory.ensure(agent, abandon),
         surface: null,
         isInteractive: ctx.get('userQuestions') !== undefined,
       }
-      // Cancelling the agent's creation abandons a hook still waiting, such as one inside `$.ui.ask`.
-      /* v8 ignore next -- the loop always supplies an initialization signal; the payload type keeps it optional */
-      const abandon = signal === undefined ? detached.controller.signal : AbortSignal.any([signal, detached.controller.signal])
       await engine.raise<SessionStartInput, SessionStartResult>(
         'session.start', input, e => ({ cwd: e.cwd }), { binding: { agent }, signal: abandon },
       )

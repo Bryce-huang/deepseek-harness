@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # build context excludes .git, so pin the version env instead; CI passes the
 # real commit hash through the DSH_CLIENT_COMMIT_HASH build arg.
 ARG DSH_CLIENT_COMMIT_HASH=
-ARG DSH_CLIENT_VERSION=0.2.1-alpha.1
+ARG DSH_CLIENT_VERSION=0.2.2-rc.2
 ENV DSH_CLIENT_COMMIT_HASH=${DSH_CLIENT_COMMIT_HASH} \
     DSH_CLIENT_VERSION=${DSH_CLIENT_VERSION}
 

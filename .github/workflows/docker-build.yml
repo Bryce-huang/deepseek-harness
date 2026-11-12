@@ -80,7 +80,7 @@ jobs:
             echo '::endgroup::'
             echo '::error::dsh web did not start within 120s; see container logs above'
             exit 1
-          fi"
+          fi
 
       - name: Verify sign-in flow
         run: |

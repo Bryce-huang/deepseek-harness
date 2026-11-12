@@ -359,8 +359,11 @@ export class WebServer extends Service {
     host: z.transform(z.string(), (value) => {
       const parsed = parseIpLiteral(value)
       if (parsed === undefined) throw notLiteralError(value)
-      if (isWildcardAddress(parsed)) {
-        throw new Error(`webserver: host ${JSON.stringify(value)} is an unspecified (wildcard) address, which is not supported: binding every interface would expose remote code execution to the network; bind one concrete IPv4 or IPv6 address of a local interface instead`)
+      // fork 2026-11-12（DPMS 561034 镜像链）：容器化部署以 0.0.0.0 监听、由宿主网络
+      // 暴露服务地址（构建时不可知），DSH_ALLOW_ALL_INTERFACES=1 显式豁免本守卫——
+      // 与 CLI 启动参数层的同名豁免一致；认证仍是唯一入口。
+      if (isWildcardAddress(parsed) && process.env.DSH_ALLOW_ALL_INTERFACES !== '1') {
+        throw new Error(`webserver: host ${JSON.stringify(value)} is an unspecified (wildcard) address, which is not supported: binding every interface would expose remote code execution to the network; bind one concrete IPv4 or IPv6 address of a local interface instead (set DSH_ALLOW_ALL_INTERFACES=1 to override)`)
       }
       return value
     }).required(),

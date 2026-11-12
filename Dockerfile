@@ -6,7 +6,7 @@ FROM node:22-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential python3 make \
     && rm -rf /var/lib/apt/lists/* \
-    && corepack enable && corepack prepare pnpm@11.7.0 --activate
+    && corepack enable && corepack prepare pnpm@11.28.5 --activate
 
 # The desktop tsdown step embeds client build metadata and runs `git rev-parse`
 # when DSH_CLIENT_VERSION is unset (scripts/client-build-environment.ts). The
@@ -55,7 +55,7 @@ ENV COREPACK_HOME=/usr/local/share/corepack
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && corepack enable && corepack prepare pnpm@11.7.0 --activate
+    && corepack enable && corepack prepare pnpm@11.28.5 --activate
 
 # Latest stable Go from the official distribution (resolved at build time).
 RUN GO_VERSION="$(curl -fsSL 'https://go.dev/dl/?mode=json' \

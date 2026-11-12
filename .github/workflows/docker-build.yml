@@ -73,6 +73,14 @@ jobs:
             sleep 2
           done
           echo "first response: $code"
+          if [ "$code" = "000" ]; then
+            # 服务 120s 内没起来：转储容器日志定位启动失败原因（entrypoint/pnpm/engines…）
+            echo '::group::dsh-smoke container logs (server never came up)'
+            docker logs dsh-smoke 2>&1 | tail -80 || true
+            echo '::endgroup::'
+            echo '::error::dsh web did not start within 120s; see container logs above'
+            exit 1
+          fi"
 
       - name: Verify sign-in flow
         run: |

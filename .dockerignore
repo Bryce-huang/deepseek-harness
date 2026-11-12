@@ -18,7 +18,7 @@ website/node_modules
 website/public
 website/.vitepress
 website/tests
-snapshots/**
-!snapshots/session/session-query-spill
-!snapshots/session/web-search-endpoint-guidance
-!snapshots/session/loopback-fixture-server.mjs
+# snapshots/ 保持在构建上下文里（17M）：客户端类型检查会 import 其中的原生 fixture
+# （cua-native/fixture-host.mjs、cua-run-code/native-channel.mjs 等），排掉它们会让
+# `tsc -b tsconfig.client.json` 以 TS2307 失败（2026-11-12 实证）。按目录逐个开例外
+# 会被上游新增的 snapshot import 再次打破，故整体保留。

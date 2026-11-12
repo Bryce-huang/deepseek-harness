@@ -342,7 +342,7 @@ export class BrowserAuth {
     const authority = requestAudience(req.headers, secure)
     if (req.method !== 'GET' || url.pathname !== CONNECT_PATH || tokens.length !== 1
       || authority === undefined || !tokenMatches(tokens.join(''), this.launchToken)) {
-      this.writeUnauthorized(req, res)
+      this.writeUnauthorized(req, res, false)
       return
     }
     const issuedAt = Date.now()

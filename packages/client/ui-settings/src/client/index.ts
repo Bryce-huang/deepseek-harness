@@ -46,7 +46,7 @@ export function apply(ctx: Context): void {
   // global to persist them host-side; the default keeps remote pages
   // process-local.
   const remotePersistence = (globalThis as SettingsPersistenceGlobal).__DSH_SETTINGS_REMOTE_PERSISTENCE__
-  const persistence = ctx.remote.$host.isLoopback ? 'host' : (remotePersistence ?? 'memory')
+  const persistence = ctx.remote.$host.isLoopback ? 'host' : (remotePersistence ?? 'host')
   const mirror = new SettingsDescribeMirror(ctx, persistence)
   ctx.effect(() => {
     const disposers = [

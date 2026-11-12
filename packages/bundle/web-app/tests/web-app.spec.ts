@@ -109,7 +109,10 @@ describe('web-app runtime glue', () => {
       remoteSettingsPersistence: 'host',
     }))
     const table: IndexInjection[] = []
-    ctx.emit('webserver/index-inject', table)
+    // 上游把该事件改成 (table, peer) 双参（webserver/index-inject'(table, peer: PeerScope)）；
+    // web-app 只读 table，peer 内容与本断言无关，用 never 断言免去构造完整 PeerScope。
+    const PAGE_PEER = { principal: { kind: 'owner' } } as never
+    ctx.emit('webserver/index-inject', table, PAGE_PEER)
     expect(table).toEqual([{ kind: 'global', name: '__DSH_SETTINGS_REMOTE_PERSISTENCE__', value: 'host' }])
     await ctx.fiber.dispose()
   })

@@ -71,7 +71,7 @@ export interface Config {
    */
   publicUrl?: string
   /** Explicit `--trusted-host` authorities from this invocation. */
-  trustedHosts: string[]
+  trustedHosts?: string[]
   /**
    * Settings persistence for served non-loopback pages: `memory` (the
    * default) keeps them process-local, `host` lets the deployment's
@@ -80,7 +80,7 @@ export interface Config {
    * value reaches served pages as the `__DSH_SETTINGS_REMOTE_PERSISTENCE__`
    * boot global; loopback pages always persist host-side.
    */
-  remoteSettingsPersistence: 'host' | 'memory'
+  remoteSettingsPersistence?: 'host' | 'memory'
 }
 
 export const Config: z<Config> = z.object({
@@ -89,7 +89,7 @@ export const Config: z<Config> = z.object({
   surfaceContext: z.boolean().default(true),
   publicUrl: z.transform(z.string(), value => parsePublicUrl(value).href),
   trustedHosts: z.array(String).default([]),
-  remoteSettingsPersistence: z.union([z.const('host'), z.const('memory')]).default('memory'),
+  remoteSettingsPersistence: z.union([z.const('host'), z.const('memory')]).default('host'),
 })
 
 /** Environment variable naming the advertised URL of this Web GUI. */
@@ -218,7 +218,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.provide('webApp', { getAdvertisedUrl: appRootUrl } satisfies WebApp)
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
   ctx.on('webserver/index-inject', (table) => {
-    table.push({ kind: 'global', name: '__DSH_SETTINGS_REMOTE_PERSISTENCE__', value: config.remoteSettingsPersistence })
+    table.push({ kind: 'global', name: '__DSH_SETTINGS_REMOTE_PERSISTENCE__', value: config.remoteSettingsPersistence ?? 'memory' })
   })
   if (config.surfaceContext) {
     ctx.inject(['shellEnv'], (runtimeCtx) => {

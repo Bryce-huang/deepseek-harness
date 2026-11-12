@@ -59,7 +59,7 @@ dsh --profile web --no-open --port 8080
 | `surfaceContext` | `true` | 把 `DSH_WEB_URL` 暴露给 agent 的 shell 命令 |
 | `publicUrl` | 未设置 | 对外公告的 HTTP(S) 应用根；否则公告绑定地址 URL |
 | `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
-| `remoteSettingsPersistence` | `memory` | 被服务的非回环页面的设置持久化：`host` 让部署上经认证的远端页面读写 Host 设置文档；回环页面始终持久化到 Host 端 |
+| `remoteSettingsPersistence` | `host` | 被服务的非回环页面的设置持久化：`host` 让部署上经认证的远端页面读写 Host 设置文档；回环页面始终持久化到 Host 端 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)列出了本运行时插件接受的字段及其 JSDoc。随发行版交付的组合插入 `schedule` 服务行与 `ui-schedule` 任务页面行，时钟读数与四个提醒工具则属于 `standard`、`cordis` 与 `ptc` 三个 preset。这三个 preset 的 `tool-subagent` 与 `tool-subagent-fork` 两行都 deny 这四个工具，因此被委派子 agent 的作用域不会列出它们。
 

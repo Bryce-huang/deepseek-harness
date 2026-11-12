@@ -59,7 +59,7 @@ The `minimal` agent preset uses a persistent shell, the `read_image` tool, and a
 | `surfaceContext` | `true` | Expose `DSH_WEB_URL` to the agent's shell commands |
 | `publicUrl` | Unset | Advertised HTTP(S) application root; otherwise announce the bind-address URL |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
-| `remoteSettingsPersistence` | `memory` | Settings persistence for served non-loopback pages: `host` lets the deployment's authenticated remote pages read and write the Host settings document; loopback pages always persist host-side |
+| `remoteSettingsPersistence` | `host` | Settings persistence for served non-loopback pages: `host` lets the deployment's authenticated remote pages read and write the Host settings document; loopback pages always persist host-side |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) lists this runtime plugin's accepted fields and their JSDoc. The shipped composition inserts the `schedule` service row and the `ui-schedule` task page row, while the clock reading and the four reminder tools belong to the `standard`, `cordis`, and `ptc` presets. The `tool-subagent` and `tool-subagent-fork` rows in those presets deny the four tools, so a delegated child's scope never lists them.
 

@@ -22,9 +22,6 @@ function described(preference: string, revision: number) {
   return { ok: true as const, value: { writable: true, hasDocument: true, namespaces: [namespace] } }
 }
 
-function bench() {
-  const describeCall = vi.fn().mockResolvedValue(described('light', 0))
-
 /** Page global the serving deployment injects to set served-page settings persistence. */
 interface SettingsPersistenceGlobal {
   __DSH_SETTINGS_REMOTE_PERSISTENCE__?: 'host' | 'memory'
@@ -105,8 +102,8 @@ describe('settings domain base plugin', () => {
     }
   })
 
-  it('keeps a non-loopback page process-local without the deployment global', async () => {
-    const { ctx, describeCall, restoreGlobal, fiber } = bench({ isLoopback: false })
+  it('keeps a non-loopback page process-local when the deployment opts out', async () => {
+    const { ctx, describeCall, restoreGlobal, fiber } = bench({ isLoopback: false, remotePersistence: 'memory' })
     try {
       await fiber.await()
       expect(ctx.get('configForms')).toBeInstanceOf(ConfigForms)

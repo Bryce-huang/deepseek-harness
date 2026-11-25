@@ -90,9 +90,11 @@ jobs:
             || { echo 'sign-in page missing token form'; exit 1; }
           # The sign-in page is the only gate: no Basic-Auth challenge header.
           ! curl -s -D - -o /dev/null -H 'Accept: text/html' http://localhost:8080/ | grep -qi 'www-authenticate'
-          # The page hints at the deployment-configured token (DSH_WEB_PASSWORD).
-          curl -s -H 'Accept: text/html' http://localhost:8080/ | grep -q 'DSH_WEB_PASSWORD'
-          # API clients keep the machine-readable body.
+          # The deployment token (DSH_WEB_PASSWORD) feeds the authentication
+          # token plugin's webToken config; the page's token form submits it.
+          curl -s -H 'Accept: text/html' http://localhost:8080/ | grep -q 'id="token-form"'
+          # API clients get the same 401 on the anonymous root; the HTML page
+          # is served to browsers by the remote-connection plugin.
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 401 ]
           # The configured token exchanges for a cookie, no log scraping needed.
           [ "$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8080/?token=smoke-fixed-token')" = 303 ]

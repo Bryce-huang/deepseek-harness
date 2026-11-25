@@ -2,8 +2,8 @@ node_modules
 .git
 .claude
 .agents
-benchmarks
 .LEGACY
+benchmarks/node_modules
 # The build runs `tsc -b tsconfig.host.json`, which type-checks
 # scripts/project-doc-site.{ts,spec.ts} (imports ../website/build.ts
 # and ../website/docs.ts), scripts/persistence-developer.spec.ts
@@ -22,3 +22,6 @@ website/tests
 # （cua-native/fixture-host.mjs、cua-run-code/native-channel.mjs 等），排掉它们会让
 # `tsc -b tsconfig.client.json` 以 TS2307 失败（2026-11-12 实证）。按目录逐个开例外
 # 会被上游新增的 snapshot import 再次打破，故整体保留。
+# benchmarks/ 同理整体保留（460K）：上游 0.2.3 起 scripts/render-benchmark-report.*
+# import ../benchmarks/support/scaling-report.ts，且 tsconfig.host/client 聚合直接
+# 收 benchmarks/**/*.ts，排掉整目录会让 `tsc -b` 以 TS2307 失败（2026-11-25 实证）。
